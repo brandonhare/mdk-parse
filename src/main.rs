@@ -1048,18 +1048,158 @@ fn parse_lbb(path: &Path) {
 	assert!(success);
 }
 
+fn parse_dti(path: &Path) {
+	let buf = Reader::read(path);
+	let filename = get_filename(path);
+	let mut data = Reader::new(&buf, false);
+	let filesize = data.u32() + 4;
+	assert_eq!(data.len() as u32, filesize, "filesize does not match");
+	data.resize(4..data.len());
+
+	let data_file_name = data.str(12);
+	let filesize2 = data.u32();
+	assert_eq!(filesize, filesize2 + 12);
+
+	let mut output = OutputWriter::new(path);
+
+	let offsets = data.get::<[u32; 5]>();
+
+	let get_range = |i: usize| {
+		let next = offsets
+			.get(i + 1)
+			.map(|o| *o as usize)
+			.unwrap_or(data.len() as usize);
+		let mut reader = Reader::new(&data.buf()[0..next], false);
+		reader.set_position(offsets[i] as u64);
+		reader
+	};
+
+	// data1
+	{
+		// data1
+		let mut data = get_range(0);
+		let a = data.u32();
+		assert_eq!(a, 0);
+		let pos = data.vec3();
+		let angle = data.f32();
+		let b = data.get_vec::<i32>(24);
+		assert!(data.remaining_len() == 0);
+
+		// todo what are these
+
+		output.write("data1", "txt", format!("{pos:?} {angle}\n{b:?}").as_bytes());
+	}
+
+	// data2
+	{
+		let mut data = get_range(1);
+		let count = data.u32();
+		let mut things = Vec::with_capacity(count as usize);
+		for i in 0..count {
+			things.push((data.get::<[i32; 2]>(), data.vec3(), data.f32()));
+			assert_eq!(things.last().unwrap().0[0], (i as i32 + 1) % 10);
+		}
+		assert_eq!(data.remaining_len(), 0);
+
+		// todo what are these
+
+		let result: String = things
+			.iter()
+			.map(|([a, b], pos, angle)| format!("{a} {b:2}, {pos:7?} {angle}\n"))
+			.collect();
+		output.write("data2", "txt", result.as_bytes());
+	}
+
+	// entities
+	{
+		let mut entities_data = get_range(2);
+
+		let num_arenas = entities_data.u32();
+		let mut arena_offsets = Vec::with_capacity(num_arenas as usize);
+		for _ in 0..num_arenas {
+			let name = entities_data.str(8);
+			let offset = entities_data.u32();
+			let num = entities_data.f32();
+			arena_offsets.push((name, offset, num));
+		}
+
+		for (arena_index, &(name, offset, num)) in arena_offsets.iter().enumerate() {
+			let mut data = entities_data.resized_zero(
+				offset as u64
+					..(arena_offsets
+						.get(arena_index + 1)
+						.map(|(_, next, _)| *next as u64)
+						.unwrap_or(entities_data.len())),
+			);
+
+			use std::fmt::Write;
+			let mut output_str = format!("{name}, {num}\n");
+
+			let num_entities = data.u32();
+			for _ in 0..num_entities {
+				let a = data.i32();
+				let b = data.i32();
+				let c = data.i32();
+				let pos = data.vec3();
+				write!(output_str, "{a},{b:4},{c}, {pos:7?}, ");
+
+				if a == 2 || a == 4 {
+					let rest = data.str(12);
+					writeln!(&mut output_str, "{rest}");
+				} else {
+					let rest = data.vec3();
+					writeln!(&mut output_str, "{rest:7?}");
+				}
+			}
+			assert_eq!(data.remaining_len(), 0);
+
+			output.write(name, "entities.txt", output_str.as_bytes());
+		}
+	}
+
+	// pal
+	let pal = {
+		let mut pal_data = get_range(3);
+		let pal_free_rows = pal_data.u32();
+		let pixels = pal_data.slice(0x300);
+		assert_eq!(pal_data.remaining_len(), 0);
+		assert!(pal_free_rows % 16 == 0);
+		output.set_output_path(&format!("pal_{}", pal_free_rows / 16), "png");
+		save_pal(&output.path, pixels);
+		pixels
+	};
+
+	// skybox
+	{
+		let mut skybox_data = get_range(4);
+		let height = 360;
+		let width = skybox_data.remaining_len() / height;
+		let skybox_pixels = skybox_data.slice((width * height) as usize);
+
+		let last = skybox_data.slice(12);
+		// todo what is this
+		assert_eq!(skybox_data.remaining_len(), 0);
+
+		output.set_output_path("skybox", "png");
+		save_png(
+			&output.path,
+			skybox_pixels,
+			width as u32,
+			height as u32,
+			Some(Box::from(pal)),
+		);
+		// todo wrapping and stuff
+	}
+}
+
 fn parse_cmi(path: &Path) {
 	let buf = Reader::read(path);
-	let filename = path.file_name().unwrap().to_str().unwrap();
+	let filename = get_filename(path);
 	let mut data = Reader::new(&buf, false);
 
 	let filesize = data.u32() + 4;
-	assert_eq!(
-		data.get_ref().len() as u32,
-		filesize,
-		"filesize does not match"
-	);
-	data = Reader::new(&buf[4..], false);
+	assert_eq!(data.len() as u32, filesize, "filesize does not match");
+	data.resize(4..data.len());
 
 	let name = data.str(12);
 	let filesize2 = data.u32();
@@ -1090,8 +1230,11 @@ fn parse_cmi(path: &Path) {
 
 	println!("{filename}");
 
-	// todo init
-	// todo object
+	// parse init entries
+	for &(name, offset) in &init_entries {}
+	// parse object entries
+	for &(name, offset) in &object_entries {}
+
 	// parse setup entries
 	for &(name, offset) in &setup_entries {
 		if offset == 0 {
@@ -1100,7 +1243,7 @@ fn parse_cmi(path: &Path) {
 		data.set_position(offset as u64);
 		let num = data.u32();
 		let num_bytes = num.to_le_bytes();
-		println!("{name} {num} {num_bytes:?}");
+		//println!("{name} {num} {num_bytes:?}");
 	}
 
 	// parse arena entries
@@ -1112,13 +1255,13 @@ fn parse_cmi(path: &Path) {
 		let sound1 = read_name(&mut data);
 		let sound2 = read_name(&mut data);
 		let offset = data.u32();
-		//println!("{name} {sound1} {sound2} {offset}");
+		println!("{name} {sound1} {sound2} {offset}");
 		if offset == 0 {
 			continue;
 		}
 		data.set_position(offset as u64);
 	}
-	println!();
+	//println!();
 }
 
 fn save_anim(name: &str, anims: &[Anim], output: &mut OutputWriter, pal: Option<Box<[u8]>>) {
@@ -1634,7 +1777,7 @@ fn main() {
 	//for_all_ext("assets", "flc", parse_video);
 	//for_all_ext("assets", "mve", parse_video);
 
-	//for_all_ext("assets", "dti", parse_dti);
+	for_all_ext("assets", "dti", parse_dti);
 	//for_all_ext("assets", "cmi", parse_cmi);
 	//for_all_ext("assets", "fti", parse_fti);
 

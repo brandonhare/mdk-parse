@@ -84,16 +84,31 @@ impl<'buf> Reader<'buf> {
 	}
 	#[must_use]
 	pub fn resized(&self, range: std::ops::Range<u64>) -> Self {
-		let mut result = Reader::new(
-			&self.buf()[range.start as usize..range.end as usize],
-			self.big_endian,
-		);
-		result.set_position(self.position() - range.start);
+		let start_index = self.position() - range.start;
+		let mut result = self.resized_zero(range);
+		result.set_position(start_index);
 		result
 	}
+	#[must_use]
+	pub fn resized_zero(&self, range: std::ops::Range<u64>) -> Self {
+		Reader::new(
+			&self.buf()[range.start as usize..range.end as usize],
+			self.big_endian,
+		)
+	}
 
+	pub fn buf(&self) -> &'buf [u8] {
+		self.get_ref()
+	}
 	pub fn remaining_buf(&self) -> &'buf [u8] {
 		&self.buf()[self.position() as usize..]
+	}
+
+	pub fn len(&self) -> u64 {
+		self.buf().len() as u64
+	}
+	pub fn remaining_len(&self) -> u64 {
+		self.len() - self.position()
 	}
 
 	pub fn try_get<T: Readable>(&mut self) -> Option<T> {
@@ -133,14 +148,6 @@ impl<'buf> Reader<'buf> {
 			pos + len as u64
 		);
 		result
-	}
-
-	pub fn buf(&self) -> &'buf [u8] {
-		self.get_ref()
-	}
-
-	pub fn len(&self) -> u64 {
-		self.buf().len() as u64
 	}
 
 	pub fn skip(&mut self, len: i64) -> Option<()> {
@@ -300,11 +307,17 @@ impl<'buf> Reader<'buf> {
 	pub fn vec3(&mut self) -> [f32; 3] {
 		self.get()
 	}
+	pub fn vec4(&mut self) -> [f32; 4] {
+		self.get()
+	}
 
 	pub fn try_vec2(&mut self) -> Option<[f32; 2]> {
 		self.try_get()
 	}
 	pub fn try_vec3(&mut self) -> Option<[f32; 3]> {
+		self.try_get()
+	}
+	pub fn try_vec4(&mut self) -> Option<[f32; 4]> {
 		self.try_get()
 	}
 }

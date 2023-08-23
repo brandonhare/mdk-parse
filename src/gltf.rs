@@ -69,8 +69,8 @@ struct Image {
 }
 
 const FILTER_NEAREST: isize = 9728;
-const FILTER_LINEAR: isize = 9729;
-const WRAP_CLAMP: isize = 33071;
+//const FILTER_LINEAR: isize = 9729;
+//const WRAP_CLAMP: isize = 33071;
 const WRAP_REPEAT: isize = 10497;
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -202,11 +202,6 @@ pub enum PrimitiveUsage {
 	Indices,
 	Positions,
 	UVs,
-}
-
-struct GltfMesh<'a> {
-	gltf: &'a mut Gltf,
-	prim_index: usize,
 }
 
 impl Gltf {
@@ -389,11 +384,7 @@ impl Gltf {
 
 fn to_uri(data: &[u8]) -> String {
 	let mut result = "data:application/octet-stream;base64,".to_owned();
-	use base64::{
-		alphabet,
-		engine::{self, general_purpose},
-		Engine,
-	};
+	use base64::{engine::general_purpose, Engine};
 	general_purpose::STANDARD.encode_string(data, &mut result);
 	result
 }

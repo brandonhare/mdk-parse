@@ -1,31 +1,12 @@
-#![allow(unused)]
-use std::convert;
-use std::fs;
 use std::io;
 use std::io::Read;
-use std::io::Seek;
-use std::io::SeekFrom;
-use std::mem::size_of;
-use std::ops::Deref;
-use std::ops::DerefMut;
-use std::path::Path;
+
+#[cfg(not(target_endian = "little"))]
+compile_error!("big endian not supported!");
 
 #[derive(Clone)]
 pub struct Reader<'buf> {
 	reader: io::Cursor<&'buf [u8]>,
-	big_endian: bool,
-}
-
-impl<'buf> Deref for Reader<'buf> {
-	type Target = io::Cursor<&'buf [u8]>;
-	fn deref(&self) -> &Self::Target {
-		&self.reader
-	}
-}
-impl<'buf> DerefMut for Reader<'buf> {
-	fn deref_mut(&mut self) -> &mut Self::Target {
-		&mut self.reader
-	}
 }
 
 pub trait Readable {
@@ -44,144 +25,114 @@ pub trait Readable {
 	fn validate(&self) -> bool;
 }
 
+#[allow(dead_code)]
 impl<'buf> Reader<'buf> {
-	pub fn read(filename: &Path) -> Vec<u8> {
-		fs::read(filename).unwrap()
-	}
-	pub fn new(buf: &'buf [u8], big_endian: bool) -> Reader<'buf> {
+	pub fn new(buf: &'buf [u8]) -> Reader<'buf> {
 		Reader {
 			reader: io::Cursor::new(buf),
-			big_endian,
 		}
 	}
-	/*
-	pub fn open(filename : &str, big_endian : bool) -> (Vec<u8>, Reader) {
-		Reader {
-			reader : io::Cursor::new(fs::read(filename).unwrap().into_boxed_slice()),
-			big_endian
-		}
-	}
-	*/
 
-	/*
-	pub fn clone_at(&self, absolute_offset: u64) -> Self {
-		let mut result = self.clone();
-		result.set_position(absolute_offset);
-		result
-	}
-	*/
-
-	pub fn truncate2(&mut self, end: u64) {
-		self.resize(self.position()..end);
-	}
-	pub fn resize(&mut self, range: std::ops::Range<u64>) {
+	pub fn resize(&mut self, range: impl std::ops::RangeBounds<usize>) {
 		*self = self.resized(range);
 	}
-
 	#[must_use]
-	pub fn truncated2(&self, end: u64) -> Self {
-		self.resized(self.position()..end)
+	pub fn resized(&self, range: impl std::ops::RangeBounds<usize>) -> Self {
+		let start = match range.start_bound() {
+			std::ops::Bound::Included(&n) => n,
+			std::ops::Bound::Excluded(&n) => n + 1,
+			std::ops::Bound::Unbounded => 0,
+		};
+		let end = match range.end_bound() {
+			std::ops::Bound::Included(&n) => n + 1,
+			std::ops::Bound::Excluded(&n) => n,
+			std::ops::Bound::Unbounded => self.len(),
+		};
+		Reader::new(&self.buf()[start..end])
 	}
 	#[must_use]
-	pub fn resized(&self, range: std::ops::Range<u64>) -> Self {
-		let start_index = self.position() - range.start;
-		let mut result = self.resized_zero(range);
-		result.set_position(start_index);
+	pub fn resized_pos(&self, range: impl std::ops::RangeBounds<usize>, new_pos: usize) -> Self {
+		let mut result = self.resized(range);
+		result.set_position(new_pos);
 		result
-	}
-	#[must_use]
-	pub fn resized_zero(&self, range: std::ops::Range<u64>) -> Self {
-		Reader::new(
-			&self.buf()[range.start as usize..range.end as usize],
-			self.big_endian,
-		)
 	}
 
 	pub fn buf(&self) -> &'buf [u8] {
-		self.get_ref()
+		self.reader.get_ref()
 	}
 	pub fn remaining_buf(&self) -> &'buf [u8] {
-		&self.buf()[self.position() as usize..]
+		&self.buf()[self.position()..]
 	}
 
-	pub fn len(&self) -> u64 {
-		self.buf().len() as u64
+	pub fn len(&self) -> usize {
+		self.buf().len()
 	}
-	pub fn remaining_len(&self) -> u64 {
+	pub fn remaining_len(&self) -> usize {
 		self.len() - self.position()
 	}
 
+	pub fn position(&self) -> usize {
+		self.reader.position() as usize
+	}
+	pub fn set_position(&mut self, pos: usize) {
+		self.reader.set_position(pos as u64)
+	}
+
 	pub fn try_get<T: Readable>(&mut self) -> Option<T> {
-		let result: T = self.try_get_unvalidated()?;
-		if result.validate() {
-			Some(result)
-		} else {
-			None
-		}
+		self.try_get_unvalidated().filter(T::validate)
 	}
 	pub fn try_get_unvalidated<T: Readable>(&mut self) -> Option<T> {
 		let mut buffer = T::new_buffer();
 		let buffer_bytes = T::buffer_as_mut(&mut buffer);
 		self.reader.read_exact(buffer_bytes).ok()?;
-		let result = if (self.big_endian) {
-			T::convert_big(buffer)
-		} else {
+		let result = if cfg!(target_endian = "little") {
 			T::convert_little(buffer)
+		} else {
+			T::convert_big(buffer)
 		};
 		Some(result)
 	}
 
 	pub fn get<T: Readable + std::fmt::Debug>(&mut self) -> T {
-		let pos = self.position();
-		let mut buffer = T::new_buffer();
-		let buffer_bytes = T::buffer_as_mut(&mut buffer);
-		let len = buffer_bytes.len();
-		self.reader.read_exact(buffer_bytes).unwrap();
-		let result = if (self.big_endian) {
-			T::convert_big(buffer)
-		} else {
-			T::convert_little(buffer)
+		let start = self.position();
+		let end = start + std::mem::size_of::<T::Buffer>();
+		let Some(result) = self.try_get_unvalidated::<T>() else {
+			panic!("failed to read bytes {start}..{end} (buffer size {})", self.len());
 		};
-		assert!(
-			result.validate(),
-			"invalid value '{result:?}' at index {pos}..{}",
-			pos + len as u64
-		);
+		if !result.validate() {
+			panic!("invalid value '{result:?}' at {start}..{end}");
+		}
 		result
 	}
 
-	pub fn skip(&mut self, len: i64) -> Option<()> {
-		self.reader
-			.seek(SeekFrom::Current(len))
-			.is_ok_and(|n| n <= self.len())
-			.then_some(())
+	#[must_use]
+	pub fn try_skip(&mut self, len: isize) -> Option<()> {
+		let end_pos = self.position().checked_add_signed(len)?;
+		if (0..=self.len()).contains(&end_pos) {
+			self.set_position(end_pos);
+			Some(())
+		} else {
+			None
+		}
+	}
+	pub fn skip(&mut self, len: isize) {
+		let start_pos = self.position();
+		let ok = self.try_skip(len).is_some();
+		assert!(
+			ok,
+			"failed to skip {len} bytes from {start_pos} (out of range 0..{})",
+			self.len()
+		);
 	}
 
 	pub fn slice(&mut self, size: usize) -> &'buf [u8] {
 		self.try_slice(size).expect("slice out of range")
 	}
 	pub fn try_slice(&mut self, size: usize) -> Option<&'buf [u8]> {
-		if !self
-			.position()
-			.checked_add(size as u64)
-			.is_some_and(|end| end <= self.len())
-		{
-			return None;
-		}
-		let result = &self.buf()[self.position() as usize..self.position() as usize + size];
-		self.skip(size as i64);
-		Some(result)
+		let pos = self.position();
+		self.try_skip(size as isize)?;
+		Some(&self.buf()[pos..pos + size])
 	}
-
-	/*
-	pub fn object_slice<T : Readable>(&mut self, count: usize) -> &'buf [T] {
-		assert!(self.big_endian != cfg!(target_endian = "little"));
-		let byte_slice = self.slice(count * std::mem::size_of::<T>());
-		let result = unsafe { std::slice::from_raw_parts(byte_slice.as_ptr() as *const T, count) };
-		assert!(result.iter().all(T::validate));
-		result
-	}
-	*/
 
 	pub fn str(&mut self, size: usize) -> &'buf str {
 		self.try_str(size).expect("invalid string")

@@ -1,17 +1,17 @@
-#![allow(unused)]
-use core::num;
-use std::cell::RefCell;
+#![allow(dead_code)]
+#![allow(unused_variables, unused_assignments)] // todo check
+#![warn(trivial_casts, trivial_numeric_casts)]
 use std::collections::HashMap;
 use std::ffi::OsStr;
-use std::fs::{self, DirEntry, File};
-use std::io::{BufWriter, Read, Seek};
+use std::fs::{self, DirEntry};
+use std::io::BufWriter;
 use std::iter::once;
-use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+
+mod gltf;
 mod reader;
 use reader::Reader;
-use std::{array, convert::*, mem};
 
 struct OutputWriter {
 	path: PathBuf,
@@ -42,32 +42,32 @@ impl OutputWriter {
 		&self.path
 	}
 	fn write(&mut self, asset_name: &str, ext: &str, data: &[u8]) {
-		fs::write(self.set_output_path(asset_name, ext), data);
+		fs::write(self.set_output_path(asset_name, ext), data).expect("failed to write file");
 	}
 	fn write_no_ext(&mut self, asset_name: &str, data: &[u8]) {
 		self.path.set_file_name(asset_name);
-		fs::write(&self.path, data);
+		fs::write(&self.path, data).expect("failed to write file");
 	}
 }
 
+fn read_file(path: &Path) -> Vec<u8> {
+	std::fs::read(path).unwrap()
+}
+
 fn parse_sni(path: &Path) {
-	let buf = Reader::read(path);
+	let buf = read_file(path);
 	let filename = get_filename(path);
-	let mut reader = Reader::new(&buf, false);
+	let mut reader = Reader::new(&buf);
 
 	let filesize = reader.u32() + 4;
-	assert_eq!(
-		reader.get_ref().len() as u32,
-		filesize,
-		"filesize does not match"
-	);
+	assert_eq!(reader.len(), filesize as usize, "filesize does not match");
 
 	let name = reader.str(12);
 	let a = reader.u32();
 	let num_entries = reader.u32();
 
 	let mut first_start = None;
-	let mut last_end = reader.position() as usize + num_entries as usize * 24;
+	let mut last_end = reader.position() + num_entries as usize * 24;
 
 	let mut output = OutputWriter::new(path);
 
@@ -97,14 +97,14 @@ fn parse_sni(path: &Path) {
 			continue;
 		}
 
-		let mut bsp_reader = Reader::new(data, false);
+		let mut bsp_reader = Reader::new(data);
 		if let Some(bsp) = try_parse_bsp(&mut bsp_reader) {
 			assert_eq!(bsp_reader.position(), bsp_reader.len());
 			save_bsp(entry_name, &bsp, &mut output);
 			continue;
 		}
 
-		if let Some(anims) = try_parse_anim(&mut Reader::new(data, false)) {
+		if let Some(anims) = try_parse_anim(&mut Reader::new(data)) {
 			save_anim(
 				entry_name,
 				&anims,
@@ -119,7 +119,7 @@ fn parse_sni(path: &Path) {
 
 	assert_eq!(
 		first_start.unwrap(),
-		reader.position() as usize,
+		reader.position(),
 		"unknown bytes at start of file"
 	);
 	assert!(
@@ -138,7 +138,7 @@ struct Anim {
 }
 
 fn try_parse_anim(data: &mut Reader) -> Option<Vec<Anim>> {
-	let filesize = data.try_u32()? as u64;
+	let filesize = data.try_u32()? as usize;
 	data.resize(4..data.len());
 	if filesize > data.len() {
 		return None;
@@ -150,10 +150,11 @@ fn try_parse_anim(data: &mut Reader) -> Option<Vec<Anim>> {
 	let mut results = Vec::new();
 
 	for &o in &offsets {
-		if o as u64 >= data.len() {
+		let o = o as usize;
+		if o >= data.len() {
 			return None;
 		}
-		data.set_position(o as u64);
+		data.set_position(o);
 		let width = data.try_u16()?;
 		let height = data.try_u16()?;
 		if width > 5000 || height > 5000 {
@@ -206,7 +207,7 @@ fn try_parse_anim(data: &mut Reader) -> Option<Vec<Anim>> {
 }
 
 fn parse_mti(path: &Path) {
-	let buf = Reader::read(path);
+	let buf = read_file(path);
 
 	let filename = path.file_name().unwrap().to_str().unwrap();
 
@@ -217,25 +218,21 @@ fn parse_mti(path: &Path) {
 	parse_mti_data(&mut output, &buf, pal)
 }
 fn parse_mti_data(output: &mut OutputWriter, buf: &[u8], pal: Option<Box<[u8]>>) {
-	let mut reader = Reader::new(buf, false);
+	let mut reader = Reader::new(buf);
 	let filesize = reader.u32() + 4;
-	assert_eq!(
-		reader.get_ref().len() as u32,
-		filesize,
-		"filesize does not match"
-	);
-	reader = Reader::new(&buf[4..], false);
+	assert_eq!(reader.len(), filesize as usize, "filesize does not match");
+	reader.resize(4..);
 
 	let name = reader.str(12);
 	let filesize2 = reader.u32();
 	assert_eq!(filesize, filesize2 + 12, "filesizes do not match");
-	let num_entries = reader.u32() as u64;
+	let num_entries = reader.u32();
 
 	let mut pen_entries = Vec::new();
 
 	for i in 0..num_entries {
 		let name = reader.str(8);
-		let mut a = reader.u32();
+		let a = reader.u32();
 
 		if a == 0xFFFFFFFF {
 			let b = reader.i32();
@@ -248,15 +245,16 @@ fn parse_mti_data(output: &mut OutputWriter, buf: &[u8], pal: Option<Box<[u8]>>)
 			let b = reader.f32();
 			let c = reader.f32();
 			let start_offset = reader.u32() as usize;
-			let mut data = Reader::new(&reader.get_ref()[start_offset..], false);
+			let mut data = reader.resized(start_offset..);
 
-			let mut width: u32;
-			let mut height: u32;
-			let mut new_a = a;
+			let width: u32;
+			let height: u32;
+			let new_a;
 
 			if a & 0x30000 == 0 {
 				width = data.u16() as u32;
 				height = data.u16() as u32;
+				new_a = a;
 			} else {
 				new_a = (a & 0xFFFF) | ((data.u16() as u32) << 0x10);
 				let ignored = data.u16();
@@ -268,16 +266,16 @@ fn parse_mti_data(output: &mut OutputWriter, buf: &[u8], pal: Option<Box<[u8]>>)
 
 			let bit_depth_2 = (1 << (bit_depth & 0x3F)) - 1;
 
-			let data_start_pos = start_offset + data.position() as usize;
+			let data_start_pos = start_offset + data.position();
 			let data_end_pos = data_start_pos + width as usize * height as usize;
 
 			//println!("{i}: {filename} a:{a:x} a2:{new_a:x} b:{b} c:{c} len:{maybe_length} value:{some_value}, bits:{bit_depth}, bits2:{bit_depth_2}, startPos:{start_offset:x}, dataStartPos:{data_start_pos:x}, dataEndPos:{data_end_pos:x}");
 
-			let data = &data.get_ref()[data.position() as usize..];
 			output.set_output_path(name, "png");
 
 			//println!("{i}: {dirname:?}");
 
+			let data = data.remaining_buf();
 			save_png(
 				&output.path,
 				&data[..width as usize * height as usize],
@@ -320,7 +318,7 @@ static PALS: std::sync::OnceLock<Mutex<HashMap<String, Box<[u8]>>>> = OnceLock::
 fn get_pal(filename: &str, name: &str) -> Option<Box<[u8]>> {
 	//println!("pal for {filename}/{name}");
 	let mut temp = String::new();
-	let mut pal_name = match filename {
+	let pal_name = match filename {
 		"FALL3D.BNI" => "SPACEPAL",
 		"STATS.MTI" => "STATS.BNI",
 		"STREAM.BNI" | "STREAM.MTI" => "STREAM.BNI",
@@ -370,17 +368,13 @@ fn set_pal(filename: &str, mut asset_name: &str, pal: &[u8]) {
 }
 
 fn parse_bni(path: &Path) {
-	let buf = Reader::read(path);
+	let buf = read_file(path);
 	let filename = path.file_name().unwrap().to_str().unwrap();
-	let mut reader = Reader::new(&buf, false);
+	let mut reader = Reader::new(&buf);
 
 	let filesize = reader.u32() + 4;
-	assert_eq!(
-		reader.get_ref().len() as u32,
-		filesize,
-		"filesize does not match"
-	);
-	reader = Reader::new(&buf[4..], false);
+	assert_eq!(reader.len(), filesize as usize, "filesize does not match");
+	reader.resize(4..);
 
 	let num_entries = reader.u32();
 	#[derive(Debug)]
@@ -433,7 +427,7 @@ fn parse_bni(path: &Path) {
 			let height = 360;
 
 			let mut result = Vec::with_capacity(width * height);
-			let mut reader = Reader::new(&data[0x600..], false);
+			let mut reader = Reader::new(&data[0x600..]);
 
 			loop {
 				let count = reader.i8();
@@ -476,7 +470,7 @@ fn parse_bni(path: &Path) {
 
 		if name.starts_with("FALLPU_") {
 			let mut names = Vec::new();
-			let mut reader = Reader::new(data, false);
+			let mut reader = Reader::new(data);
 			loop {
 				let pos = reader.position();
 				if reader.u32() == 0 {
@@ -517,22 +511,22 @@ fn parse_bni(path: &Path) {
 			}
 		}
 
-		if let Some(anims) = try_parse_anim(&mut Reader::new(data, false)) {
+		if let Some(anims) = try_parse_anim(&mut Reader::new(data)) {
 			save_anim(name, &anims, &mut output, get_pal(filename, name));
 			continue;
 		}
 
-		if let Some(multimesh) = try_parse_multimesh(&mut Reader::new(data, false)) {
+		if let Some(multimesh) = try_parse_multimesh(&mut Reader::new(data)) {
 			save_multimesh(name, &multimesh, &mut output);
 			continue;
 		}
 
-		if let Some(mesh) = try_parse_mesh(&mut Reader::new(data, false), true) {
+		if let Some(mesh) = try_parse_mesh(&mut Reader::new(data), true) {
 			save_mesh(name, &mesh, &[], &mut output);
 			continue;
 		}
 
-		if let Some(anim) = try_parse_alienanim(&mut Reader::new(data, false)) {
+		if let Some(anim) = try_parse_alienanim(&mut Reader::new(data)) {
 			output.write(name, "anim.txt", format!("{anim:?}").as_bytes());
 			continue;
 		}
@@ -563,9 +557,9 @@ fn parse_bni(path: &Path) {
 }
 
 fn parse_zoom(name: &str, data: &[u8], output: &mut OutputWriter) -> Vec<u8> {
-	let mut reader = Reader::new(data, false);
+	let mut reader = Reader::new(data);
 	let filesize = reader.u32();
-	reader.resize(4..4 + filesize as u64);
+	reader.resize(4..4 + filesize as usize);
 
 	let mut result = Vec::new();
 
@@ -603,9 +597,9 @@ fn save_zoom(name: &str, data: &[Vec<u8>], output: &mut OutputWriter, pal: Optio
 }
 
 fn parse_overlay(name: &str, data: &[u8], output: &mut OutputWriter, pal: Option<Box<[u8]>>) {
-	let mut reader = Reader::new(data, false);
+	let mut reader = Reader::new(data);
 	let filesize = reader.u32();
-	reader.resize(4..4 + filesize as u64);
+	reader.resize(4..4 + filesize as usize);
 
 	let width = 600;
 	let height = 360;
@@ -660,16 +654,12 @@ fn try_parse_image(data: &[u8], asset_name: &str, output: &mut OutputWriter) -> 
 }
 
 fn parse_mto(path: &Path) {
-	let buf = Reader::read(path);
+	let buf = read_file(path);
 	let filename = get_filename(path);
-	let mut data = Reader::new(&buf, false);
+	let mut data = Reader::new(&buf);
 
 	let filesize = data.u32() + 4;
-	assert_eq!(
-		data.get_ref().len() as u32,
-		filesize,
-		"filesize does not match"
-	);
+	assert_eq!(data.len() as u32, filesize, "filesize does not match");
 
 	let mto_name = data.str(12);
 	let filesize2 = data.u32();
@@ -685,9 +675,9 @@ fn parse_mto(path: &Path) {
 		new_path.pop();
 
 		let asset_offset = data.u32() as usize;
-		let mut asset_reader = Reader::new(&data.buf()[asset_offset..], false);
-		let asset_filesize = asset_reader.u32() as u64;
-		asset_reader.resize(4..asset_filesize);
+		let mut asset_reader = data.resized(asset_offset..);
+		let asset_filesize = asset_reader.u32();
+		asset_reader.resize(4..asset_filesize as usize);
 
 		let subfile_offset = asset_reader.u32() as usize;
 		let pal_offset = asset_reader.u32() as usize;
@@ -699,7 +689,7 @@ fn parse_mto(path: &Path) {
 
 		{
 			// parse subfile
-			asset_reader.set_position(subfile_offset as u64);
+			asset_reader.set_position(subfile_offset);
 			let offset1_len = asset_reader.u32() as usize;
 			let offset1_data =
 				&asset_reader.buf()[subfile_offset + 4..subfile_offset + 4 + offset1_len];
@@ -708,7 +698,7 @@ fn parse_mto(path: &Path) {
 
 		{
 			// parse pal
-			asset_reader.set_position(pal_offset as u64);
+			asset_reader.set_position(pal_offset);
 			let pal_data = &asset_reader.buf()[pal_offset..pal_offset + 336];
 			output.set_output_path("PAL", "PNG");
 			save_pal(&output.path, pal_data);
@@ -716,7 +706,7 @@ fn parse_mto(path: &Path) {
 
 		{
 			// parse bsp
-			asset_reader.set_position(bsp_offset as u64);
+			asset_reader.set_position(bsp_offset);
 			let bsp = parse_bsp(&mut asset_reader);
 			save_bsp(arena_name, &bsp, &mut output);
 		}
@@ -729,7 +719,7 @@ fn parse_mto(path: &Path) {
 }
 
 fn parse_mto_subthing(arena_name: &str, buf: &[u8], output: &mut OutputWriter) {
-	let mut data = Reader::new(buf, false);
+	let mut data = Reader::new(buf);
 
 	let num_animations = data.u32();
 	let num_meshes = data.u32();
@@ -758,8 +748,7 @@ fn parse_mto_subthing(arena_name: &str, buf: &[u8], output: &mut OutputWriter) {
 	// animations?
 	for (i, &(name, offset)) in animations.iter().enumerate() {
 		let end = all_offsets[all_offsets.iter().position(|o| *o == offset).unwrap() + 1];
-		let mut reader = Reader::new(&data.buf()[offset as usize..end as usize], false);
-		let Some(anim) = try_parse_alienanim(&mut reader) else {
+		let Some(anim) = try_parse_alienanim(&mut data.resized(offset as usize .. end as usize)) else {
 			eprintln!("failed to parse anim {i} {arena_name}/{name}");
 			output.write(name, "", &data.buf()[offset as usize..end as usize]);
 			continue;
@@ -769,7 +758,7 @@ fn parse_mto_subthing(arena_name: &str, buf: &[u8], output: &mut OutputWriter) {
 
 	// meshes
 	for &(name, offset) in &mesh_headers {
-		data.set_position(offset as u64);
+		data.set_position(offset as usize);
 
 		let is_multimesh = data.u32();
 
@@ -833,7 +822,7 @@ fn try_parse_bsp(data: &mut Reader) -> Option<Bsp> {
 	let material_names = (0..num_materials)
 		.map(|_| data.try_str(10))
 		.collect::<Option<Vec<&str>>>()?;
-	data.skip(num_materials as i64 * 10 % 4)?; // align
+	data.try_skip(num_materials as isize * 10 % 4)?; // align
 
 	let num_planes = data.try_u32()? as usize;
 	if num_planes > 10000 {
@@ -959,7 +948,7 @@ impl std::fmt::Debug for AlienAnimPartType {
 
 fn try_parse_alienanim(data: &mut Reader) -> Option<AlienAnim> {
 	let speed = data.try_f32()?;
-	data.resize(4..data.len());
+	data.resize(4..);
 	let np = data.try_u32()?;
 	let nf = data.try_u32()?;
 
@@ -968,7 +957,7 @@ fn try_parse_alienanim(data: &mut Reader) -> Option<AlienAnim> {
 	}
 
 	let offsets = data.try_get_vec::<u32>(np as usize)?;
-	if offsets.iter().any(|o| *o as u64 >= data.len()) {
+	if offsets.iter().any(|o| *o as usize >= data.len()) {
 		return None;
 	}
 	let vectors = data.try_get_vec::<Vec3>(nf as usize)?;
@@ -982,9 +971,8 @@ fn try_parse_alienanim(data: &mut Reader) -> Option<AlienAnim> {
 	let mut parts = Vec::new();
 
 	for (i, &offset) in offsets.iter().enumerate() {
-		data.set_position(offset as u64);
-		let next = offsets.get(i + 1).copied().unwrap_or(data.len() as u32) as u64;
-		let mut data = data.resized(0..next);
+		let next = offsets.get(i + 1).copied().unwrap_or(data.len() as u32);
+		let mut data = data.resized_pos(..next as usize, offset as usize);
 
 		let name = data.try_str(12)?;
 		let count = data.try_u32().filter(|c| *c < 1000)?;
@@ -1021,7 +1009,7 @@ fn try_parse_alienanim(data: &mut Reader) -> Option<AlienAnim> {
 			}
 		};
 
-		if data.position() + 4 < next {
+		if data.position() + 4 < next as usize {
 			println!("animation data left over");
 			return None;
 		}
@@ -1039,7 +1027,7 @@ fn try_parse_alienanim(data: &mut Reader) -> Option<AlienAnim> {
 
 fn parse_lbb(path: &Path) {
 	let filename = path.file_name().unwrap().to_str().unwrap();
-	let data = Reader::read(path);
+	let data = read_file(path);
 
 	let mut output = OutputWriter::new_no_dir(path);
 	output.path.pop();
@@ -1049,12 +1037,12 @@ fn parse_lbb(path: &Path) {
 }
 
 fn parse_dti(path: &Path) {
-	let buf = Reader::read(path);
+	let buf = read_file(path);
 	let filename = get_filename(path);
-	let mut data = Reader::new(&buf, false);
+	let mut data = Reader::new(&buf);
 	let filesize = data.u32() + 4;
 	assert_eq!(data.len() as u32, filesize, "filesize does not match");
-	data.resize(4..data.len());
+	data.resize(4..);
 
 	let data_file_name = data.str(12);
 	let filesize2 = data.u32();
@@ -1068,10 +1056,8 @@ fn parse_dti(path: &Path) {
 		let next = offsets
 			.get(i + 1)
 			.map(|o| *o as usize)
-			.unwrap_or(data.len() as usize);
-		let mut reader = Reader::new(&data.buf()[0..next], false);
-		reader.set_position(offsets[i] as u64);
-		reader
+			.unwrap_or(data.len());
+		data.resized_pos(..next, offsets[i] as usize)
 	};
 
 	// data1
@@ -1124,11 +1110,11 @@ fn parse_dti(path: &Path) {
 		}
 
 		for (arena_index, &(name, offset, num)) in arena_offsets.iter().enumerate() {
-			let mut data = entities_data.resized_zero(
-				offset as u64
+			let mut data = entities_data.resized(
+				offset as usize
 					..(arena_offsets
 						.get(arena_index + 1)
-						.map(|(_, next, _)| *next as u64)
+						.map(|(_, next, _)| *next as usize)
 						.unwrap_or(entities_data.len())),
 			);
 
@@ -1141,14 +1127,14 @@ fn parse_dti(path: &Path) {
 				let b = data.i32();
 				let c = data.i32();
 				let pos = data.vec3();
-				write!(output_str, "{a},{b:4},{c}, {pos:7?}, ");
+				write!(output_str, "{a},{b:4},{c}, {pos:7?}, ").unwrap();
 
 				if a == 2 || a == 4 {
 					let rest = data.str(12);
-					writeln!(&mut output_str, "{rest}");
+					writeln!(&mut output_str, "{rest}").unwrap();
 				} else {
 					let rest = data.vec3();
-					writeln!(&mut output_str, "{rest:7?}");
+					writeln!(&mut output_str, "{rest:7?}").unwrap();
 				}
 			}
 			assert_eq!(data.remaining_len(), 0);
@@ -1174,7 +1160,7 @@ fn parse_dti(path: &Path) {
 		let mut skybox_data = get_range(4);
 		let height = 360;
 		let width = skybox_data.remaining_len() / height;
-		let skybox_pixels = skybox_data.slice((width * height) as usize);
+		let skybox_pixels = skybox_data.slice(width * height);
 
 		let last = skybox_data.slice(12);
 		// todo what is this
@@ -1193,13 +1179,13 @@ fn parse_dti(path: &Path) {
 }
 
 fn parse_cmi(path: &Path) {
-	let buf = Reader::read(path);
+	let buf = read_file(path);
 	let filename = get_filename(path);
-	let mut data = Reader::new(&buf, false);
+	let mut data = Reader::new(&buf);
 
 	let filesize = data.u32() + 4;
-	assert_eq!(data.len() as u32, filesize, "filesize does not match");
-	data.resize(4..data.len());
+	assert_eq!(data.len(), filesize as usize, "filesize does not match");
+	data.resize(4..);
 
 	let name = data.str(12);
 	let filesize2 = data.u32();
@@ -1221,7 +1207,7 @@ fn parse_cmi(path: &Path) {
 		entries
 	}
 
-	let mut output = OutputWriter::new(path);
+	//let mut output = OutputWriter::new(path);
 
 	let init_entries = read_entries(&mut data);
 	let object_entries = read_entries(&mut data);
@@ -1240,7 +1226,7 @@ fn parse_cmi(path: &Path) {
 		if offset == 0 {
 			continue;
 		}
-		data.set_position(offset as u64);
+		data.set_position(offset);
 		let num = data.u32();
 		let num_bytes = num.to_le_bytes();
 		//println!("{name} {num} {num_bytes:?}");
@@ -1251,7 +1237,7 @@ fn parse_cmi(path: &Path) {
 		if offset == 0 {
 			continue;
 		}
-		data.set_position(offset as u64);
+		data.set_position(offset);
 		let sound1 = read_name(&mut data);
 		let sound2 = read_name(&mut data);
 		let offset = data.u32();
@@ -1259,7 +1245,7 @@ fn parse_cmi(path: &Path) {
 		if offset == 0 {
 			continue;
 		}
-		data.set_position(offset as u64);
+		data.set_position(offset as usize);
 	}
 	//println!();
 }
@@ -1348,7 +1334,7 @@ fn setup_png<'a>(
 	if let Some(palette) = palette {
 		encoder.set_color(png::ColorType::Indexed);
 		for (alpha, rgb) in trns.iter_mut().zip(palette.chunks_exact(3)) {
-			*alpha = (if rgb == [255, 0, 255] { 0 } else { 255 });
+			*alpha = if rgb == [255, 0, 255] { 0 } else { 255 };
 		}
 		trns[0] = 0;
 		encoder.set_palette(palette.into_vec());
@@ -1360,8 +1346,9 @@ fn setup_png<'a>(
 }
 
 fn save_png(path: &Path, data: &[u8], width: u32, height: u32, palette: Option<Box<[u8]>>) {
-	let mut encoder = setup_png(path, width, height, palette);
-	let mut encoder = encoder.write_header().unwrap();
+	let mut encoder = setup_png(path, width, height, palette)
+		.write_header()
+		.unwrap();
 	encoder.write_image_data(data).unwrap();
 	encoder.finish().unwrap();
 }
@@ -1477,7 +1464,7 @@ fn try_parse_mesh(data: &mut Reader, read_textures: bool) -> Option<Mesh> {
 	if num_tris > 10000 {
 		return None;
 	}
-	let mut tris = try_parse_mesh_tris(data, num_tris)?;
+	let tris = try_parse_mesh_tris(data, num_tris)?;
 
 	let [min_x, max_x, min_y, max_y, min_z, max_z]: [f32; 6] = data.try_get()?;
 	let bbox = [[min_x, min_y, min_z], [max_x, max_y, max_z]];
@@ -1540,7 +1527,6 @@ fn to_string(path: &OsStr) -> String {
 	path.to_str().unwrap().to_owned()
 }
 
-mod gltf;
 fn save_mesh(name: &str, mesh: &Mesh, textures: &[ImageRef], output: &mut OutputWriter) {
 	#[derive(Default, Debug)]
 	struct SplitMesh {
@@ -1551,7 +1537,7 @@ fn save_mesh(name: &str, mesh: &Mesh, textures: &[ImageRef], output: &mut Output
 		verts: Vec<Vec3>,
 		uvs: Vec<[f32; 2]>,
 		vert_map: HashMap<(u16, [isize; 2]), u16>,
-	};
+	}
 
 	fn round_uvs(uvs: [f32; 2]) -> [isize; 2] {
 		uvs.map(|f| (f * 1024.0) as isize)
@@ -1638,7 +1624,6 @@ fn save_mesh(name: &str, mesh: &Mesh, textures: &[ImageRef], output: &mut Output
 
 fn save_multimesh(name: &str, meshes: &Multimesh, output: &mut OutputWriter) {
 	let mut gltf = gltf::Gltf::new(name.to_owned());
-	let mut index = 0.0;
 	for mesh in &meshes.meshes {
 		let mut verts = mesh.mesh.verts.clone();
 		for p in &mut verts {
@@ -1670,6 +1655,7 @@ fn debug_scan_data_for_float_runs(data: &mut Reader) {
 	let mut floats = Vec::new();
 	let mut float_start = 0;
 	let mut all_floats = Vec::new();
+
 	while data.position() < data.len() {
 		let word32 = data.u32();
 		let word16_1 = i16::from_le_bytes(word32.to_le_bytes()[..2].try_into().unwrap());
@@ -1704,7 +1690,7 @@ fn get_filename(path: &Path) -> &str {
 fn parse_video(path: &Path) {
 	let mut output_path = OutputWriter::get_output_path(path);
 	output_path.set_extension("mp4");
-	std::fs::create_dir_all(output_path.with_file_name(""));
+	let _ = std::fs::create_dir_all(output_path.with_file_name(""));
 	println!("converting {}", path.display());
 	let result = std::process::Command::new("ffmpeg")
 		.args(["-y", "-loglevel", "error", "-i"])
@@ -1768,17 +1754,18 @@ fn for_all_ext(path: impl AsRef<Path>, ext: &str, func: fn(&Path)) {
 fn main() {
 	let start_time = std::time::Instant::now();
 
-	//for_all_ext("assets", "bni", parse_bni);
-	//for_all_ext("assets", "mto", parse_mto);
-	//for_all_ext("assets", "sni", parse_sni);
-	//for_all_ext("assets", "mti", parse_mti);
+	for_all_ext("assets", "bni", parse_bni);
+	for_all_ext("assets", "mto", parse_mto);
+	for_all_ext("assets", "sni", parse_sni);
+	for_all_ext("assets", "mti", parse_mti);
 
-	//for_all_ext("assets", "lbb", parse_lbb);
+	for_all_ext("assets", "dti", parse_dti);
+	for_all_ext("assets", "cmi", parse_cmi);
+
+	for_all_ext("assets", "lbb", parse_lbb);
 	//for_all_ext("assets", "flc", parse_video);
 	//for_all_ext("assets", "mve", parse_video);
 
-	for_all_ext("assets", "dti", parse_dti);
-	//for_all_ext("assets", "cmi", parse_cmi);
 	//for_all_ext("assets", "fti", parse_fti);
 
 	println!("done in {:.2?}", start_time.elapsed());

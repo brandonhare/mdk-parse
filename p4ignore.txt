@@ -1,3 +1,4 @@
 output
 target
-
+assets
+Cargo.lock

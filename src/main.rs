@@ -1,13 +1,14 @@
 #![allow(dead_code)]
 #![allow(unused_variables, unused_assignments)] // todo check
 #![warn(trivial_casts, trivial_numeric_casts)]
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs::{self, DirEntry};
 use std::io::BufWriter;
 use std::iter::once;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::rc::Rc;
 
 mod gltf;
 mod reader;
@@ -217,7 +218,7 @@ fn parse_mti(path: &Path) {
 
 	parse_mti_data(&mut output, &buf, pal)
 }
-fn parse_mti_data(output: &mut OutputWriter, buf: &[u8], pal: Option<Box<[u8]>>) {
+fn parse_mti_data(output: &mut OutputWriter, buf: &[u8], pal: PalRef) {
 	let mut reader = Reader::new(buf);
 	let filesize = reader.u32() + 4;
 	assert_eq!(reader.len(), filesize as usize, "filesize does not match");
@@ -313,58 +314,73 @@ fn get_bits(n: u32) -> u32 {
 	result
 }
 
-static PALS: std::sync::OnceLock<Mutex<HashMap<String, Box<[u8]>>>> = OnceLock::new();
+//static PALS: std::sync::OnceLock<Mutex<HashMap<String, Box<[u8]>>>> = OnceLock::new();
 
-fn get_pal(filename: &str, name: &str) -> Option<Box<[u8]>> {
-	//println!("pal for {filename}/{name}");
-	let mut temp = String::new();
-	let pal_name = match filename {
+thread_local! {
+	static PALS : RefCell<HashMap<String, Rc<[u8]>>> = Default::default();
+}
+
+type PalRef = Option<Rc<[u8]>>;
+fn get_pal(filename: &str, name: &str) -> PalRef {
+	let temp: String;
+	let asset_name = match filename {
+		"STREAM.BNI" | "STREAM.MTI" => "STREAM",
 		"FALL3D.BNI" => "SPACEPAL",
-		"STATS.MTI" => "STATS.BNI",
-		"STREAM.BNI" | "STREAM.MTI" => "STREAM.BNI",
-		"TRAVSPRT.BNI" => "STREAM.BNI", // todo is this correct?
-		_ if filename.starts_with("FALL3D_") && filename.ends_with(".MTI") => {
-			let n = filename.as_bytes()[7] as char;
-			temp = format!("FALLP{n}");
+		filename if filename.starts_with("FALL3D_") => {
+			temp = format!("FALLP{}", filename.as_bytes()[7] as char);
 			&temp
 		}
-		_ => name,
+		"STATS.MTI" => "STATS",
+		"TRAVSPRT.BNI" => "LEVEL3",
+		filename if filename.starts_with("LEVEL") => &filename[..6],
+
+		filename => filename,
 	};
-	let result = PALS
-		.get_or_init(Default::default)
-		.lock()
-		.unwrap()
-		.get(pal_name)
-		.map(Clone::clone);
+	let result = PALS.with(|pals| pals.borrow().get(asset_name).cloned());
 	if result.is_none() {
-		//println!("pal not found for {filename}/{name}");
-		if filename != "STREAM.BNI" {
-			return get_pal("STREAM.BNI", name); // todo fixme this is wrong
-		}
+		//println!("missing {filename}/{name} ({asset_name})");
 	}
 	result
 }
-fn set_pal(filename: &str, mut asset_name: &str, pal: &[u8]) {
-	assert_eq!(pal.len(), 0x300);
-	if asset_name == "PAL" {
-		match filename {
-			"STREAM.BNI" => asset_name = "STREAM_PAL",
-			"STATS.BNI" => asset_name = "STATS_PAL",
-			_ => eprintln!("unknown pal filename {filename}"),
-		}
-	}
+fn set_pal(filename: &str, asset_name: &str, pal: &[u8]) -> PalRef {
+	let asset_name = match (asset_name, filename) {
+		("PAL", "STREAM.BNI") => "STREAM",
+		("PAL", "STATS.BNI") => "STATS",
+		_ => asset_name,
+	};
 
-	let pals = &mut *PALS.get_or_init(Default::default).lock().unwrap();
+	let level_name = if pal.len() < 0x300 {
+		filename
+			.split_once("O.MTO")
+			.map(|(a, _)| a)
+			.or_else(|| panic!("failed to get level name from {filename}/{asset_name}"))
+	} else {
+		None
+	};
 
-	pals.entry(asset_name.to_owned())
-		.and_modify(|_| eprintln!("duplicate pal {asset_name}"))
-		.or_insert(pal.to_owned().into_boxed_slice());
+	PALS.with(|pals| {
+		let pals = &mut *pals.borrow_mut();
 
-	if filename != "FALL3D.BNI" {
-		pals.entry(filename.to_owned())
-			.and_modify(|_| eprintln!("duplicate filename pal {filename}"))
-			.or_insert(pal.to_owned().into_boxed_slice());
-	}
+		let result = if let Some(level_name) = level_name {
+			if let Some(level_pal) = pals.get(level_name) {
+				let mut result: Rc<[u8]> = Rc::from(level_pal.as_ref());
+				Rc::get_mut(&mut result).unwrap()[4 * 16 * 3..4 * 16 * 3 + pal.len()]
+					.copy_from_slice(pal);
+				result
+			} else {
+				println!("level pal not found for arena pal {level_name}/{asset_name}");
+				return None;
+			}
+		} else {
+			Rc::from(pal)
+		};
+
+		pals.entry(asset_name.to_owned())
+			.and_modify(|_| panic!("duplicate pal {asset_name}!"))
+			.or_insert(result.clone());
+
+		Some(result)
+	})
 }
 
 fn parse_bni(path: &Path) {
@@ -450,7 +466,7 @@ fn parse_bni(path: &Path) {
 				&result,
 				width as u32,
 				height as u32,
-				Some(Box::from(lut1)),
+				Some(lut1.into()),
 			);
 			output.set_output_path(&format!("{name}_2"), "png");
 			save_png(
@@ -458,7 +474,7 @@ fn parse_bni(path: &Path) {
 				&result,
 				width as u32,
 				height as u32,
-				Some(Box::from(lut2)),
+				Some(lut2.into()),
 			);
 			continue;
 		}
@@ -581,7 +597,7 @@ fn parse_zoom(name: &str, data: &[u8], output: &mut OutputWriter) -> Vec<u8> {
 	result
 }
 
-fn save_zoom(name: &str, data: &[Vec<u8>], output: &mut OutputWriter, pal: Option<Box<[u8]>>) {
+fn save_zoom(name: &str, data: &[Vec<u8>], output: &mut OutputWriter, pal: PalRef) {
 	let anims: Vec<_> = data
 		.iter()
 		.cloned()
@@ -596,7 +612,7 @@ fn save_zoom(name: &str, data: &[Vec<u8>], output: &mut OutputWriter, pal: Optio
 	save_anim(name, &anims, output, pal);
 }
 
-fn parse_overlay(name: &str, data: &[u8], output: &mut OutputWriter, pal: Option<Box<[u8]>>) {
+fn parse_overlay(name: &str, data: &[u8], output: &mut OutputWriter, pal: PalRef) {
 	let mut reader = Reader::new(data);
 	let filesize = reader.u32();
 	reader.resize(4..4 + filesize as usize);
@@ -648,7 +664,7 @@ fn try_parse_image(data: &[u8], asset_name: &str, output: &mut OutputWriter) -> 
 		data,
 		width as _,
 		height as _,
-		Some(lut.to_vec().into_boxed_slice()),
+		Some(lut.into()),
 	);
 	true
 }
@@ -699,7 +715,10 @@ fn parse_mto(path: &Path) {
 		{
 			// parse pal
 			asset_reader.set_position(pal_offset);
-			let pal_data = &asset_reader.buf()[pal_offset..pal_offset + 336];
+			let pal_size = bsp_offset - pal_offset;
+			assert_eq!(pal_size, 336);
+			let pal_data = &asset_reader.buf()[pal_offset..pal_offset + pal_size];
+			set_pal(filename, arena_name, pal_data);
 			output.set_output_path("PAL", "PNG");
 			save_pal(&output.path, pal_data);
 		}
@@ -1150,9 +1169,9 @@ fn parse_dti(path: &Path) {
 		let pixels = pal_data.slice(0x300);
 		assert_eq!(pal_data.remaining_len(), 0);
 		assert!(pal_free_rows % 16 == 0);
-		output.set_output_path(&format!("pal_{}", pal_free_rows / 16), "png");
+		output.set_output_path("PAL", "png");
 		save_pal(&output.path, pixels);
-		pixels
+		set_pal(filename, filename.split_once('.').unwrap().0, pixels)
 	};
 
 	// skybox
@@ -1172,7 +1191,7 @@ fn parse_dti(path: &Path) {
 			skybox_pixels,
 			width as u32,
 			height as u32,
-			Some(Box::from(pal)),
+			pal,
 		);
 		// todo wrapping and stuff
 	}
@@ -1250,7 +1269,7 @@ fn parse_cmi(path: &Path) {
 	//println!();
 }
 
-fn save_anim(name: &str, anims: &[Anim], output: &mut OutputWriter, pal: Option<Box<[u8]>>) {
+fn save_anim(name: &str, anims: &[Anim], output: &mut OutputWriter, pal: PalRef) {
 	assert!(!anims.is_empty());
 	output.set_output_path(name, "png");
 	if anims.len() == 1 {
@@ -1279,7 +1298,7 @@ fn save_anim(name: &str, anims: &[Anim], output: &mut OutputWriter, pal: Option<
 	let width = (max_x + offset_x) as usize;
 	let height = (max_y + offset_y) as usize;
 
-	let mut encoder = setup_png(&output.path, width as u32, height as u32, pal);
+	let mut encoder = setup_png(&output.path, width as u32, height as u32, &pal);
 	encoder.set_animated(anims.len() as u32, 0).unwrap();
 	encoder.set_sep_def_img(false).unwrap();
 	encoder.set_frame_delay(1, 12).unwrap();
@@ -1323,7 +1342,7 @@ fn save_bsp(name: &str, bsp: &Bsp, output: &mut OutputWriter) {
 }
 
 fn setup_png<'a>(
-	path: &Path, width: u32, height: u32, palette: Option<Box<[u8]>>,
+	path: &Path, width: u32, height: u32, palette: &'a PalRef,
 ) -> png::Encoder<'a, impl std::io::Write> {
 	let mut trns = [255; 16 * 16];
 	let mut encoder = png::Encoder::new(
@@ -1337,7 +1356,7 @@ fn setup_png<'a>(
 			*alpha = if rgb == [255, 0, 255] { 0 } else { 255 };
 		}
 		trns[0] = 0;
-		encoder.set_palette(palette.into_vec());
+		encoder.set_palette(std::borrow::Cow::Borrowed(palette.as_ref()));
 		encoder.set_trns(trns.to_vec());
 	} else {
 		encoder.set_color(png::ColorType::Grayscale);
@@ -1345,8 +1364,8 @@ fn setup_png<'a>(
 	encoder
 }
 
-fn save_png(path: &Path, data: &[u8], width: u32, height: u32, palette: Option<Box<[u8]>>) {
-	let mut encoder = setup_png(path, width, height, palette)
+fn save_png(path: &Path, data: &[u8], width: u32, height: u32, palette: PalRef) {
+	let mut encoder = setup_png(path, width, height, &palette)
 		.write_header()
 		.unwrap();
 	encoder.write_image_data(data).unwrap();
@@ -1754,15 +1773,15 @@ fn for_all_ext(path: impl AsRef<Path>, ext: &str, func: fn(&Path)) {
 fn main() {
 	let start_time = std::time::Instant::now();
 
+	for_all_ext("assets", "dti", parse_dti);
 	for_all_ext("assets", "bni", parse_bni);
 	for_all_ext("assets", "mto", parse_mto);
 	for_all_ext("assets", "sni", parse_sni);
 	for_all_ext("assets", "mti", parse_mti);
 
-	for_all_ext("assets", "dti", parse_dti);
-	for_all_ext("assets", "cmi", parse_cmi);
+	//for_all_ext("assets", "cmi", parse_cmi);
 
-	for_all_ext("assets", "lbb", parse_lbb);
+	//for_all_ext("assets", "lbb", parse_lbb);
 	//for_all_ext("assets", "flc", parse_video);
 	//for_all_ext("assets", "mve", parse_video);
 

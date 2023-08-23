@@ -1079,23 +1079,27 @@ fn parse_dti(path: &Path) {
 		data.resized_pos(..next, offsets[i] as usize)
 	};
 
-	// data1
+	// data1 (arena and skybox data?)
 	{
-		// data1
 		let mut data = get_range(0);
-		let a = data.u32();
-		assert_eq!(a, 0);
-		let pos = data.vec3();
+		let arena_index = data.u32();
+		assert_eq!(arena_index, 0);
+		let pos = data.vec3(); // player spawn position?
 		let angle = data.f32();
-		let b = data.get_vec::<i32>(24);
+		let things = data.get_vec::<i32>(8); // skybox?
+		let more_things = data.get_vec::<i32>(16); // palette
 		assert!(data.remaining_len() == 0);
 
 		// todo what are these
 
-		output.write("data1", "txt", format!("{pos:?} {angle}\n{b:?}").as_bytes());
+		output.write(
+			"data1",
+			"txt",
+			format!("{pos:?} {angle}\n{things:?}, {more_things:?}").as_bytes(),
+		);
 	}
 
-	// data2
+	// data2  (teleport locations?)
 	{
 		let mut data = get_range(1);
 		let count = data.u32();
@@ -1110,12 +1114,14 @@ fn parse_dti(path: &Path) {
 
 		let result: String = things
 			.iter()
-			.map(|([a, b], pos, angle)| format!("{a} {b:2}, {pos:7?} {angle}\n"))
+			.map(|([a, arena_index], pos, angle)| {
+				format!("{a} {arena_index:2}, {pos:7?} {angle}\n")
+			})
 			.collect();
 		output.write("data2", "txt", result.as_bytes());
 	}
 
-	// entities
+	// entities (connnects? arena locations?)
 	{
 		let mut entities_data = get_range(2);
 
@@ -1142,13 +1148,13 @@ fn parse_dti(path: &Path) {
 
 			let num_entities = data.u32();
 			for _ in 0..num_entities {
-				let a = data.i32();
-				let b = data.i32();
+				let entity_type = data.i32();
+				let arena_index = data.i32();
 				let c = data.i32();
 				let pos = data.vec3();
-				write!(output_str, "{a},{b:4},{c}, {pos:7?}, ").unwrap();
+				write!(output_str, "{entity_type},{arena_index:4},{c}, {pos:7?}, ").unwrap();
 
-				if a == 2 || a == 4 {
+				if entity_type == 2 || entity_type == 4 {
 					let rest = data.str(12);
 					writeln!(&mut output_str, "{rest}").unwrap();
 				} else {
@@ -1773,11 +1779,11 @@ fn for_all_ext(path: impl AsRef<Path>, ext: &str, func: fn(&Path)) {
 fn main() {
 	let start_time = std::time::Instant::now();
 
-	for_all_ext("assets", "dti", parse_dti);
-	for_all_ext("assets", "bni", parse_bni);
-	for_all_ext("assets", "mto", parse_mto);
-	for_all_ext("assets", "sni", parse_sni);
-	for_all_ext("assets", "mti", parse_mti);
+	//for_all_ext("assets", "dti", parse_dti);
+	//for_all_ext("assets", "bni", parse_bni);
+	//for_all_ext("assets", "mto", parse_mto);
+	//for_all_ext("assets", "sni", parse_sni);
+	//for_all_ext("assets", "mti", parse_mti);
 
 	//for_all_ext("assets", "cmi", parse_cmi);
 

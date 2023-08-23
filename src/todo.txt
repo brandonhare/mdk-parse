@@ -1,1 +1,7 @@
 cmi
+dti format
+dti data1, data2
+dti skybox wrapping, extra data
+level6/olym_9 overlapping palette?
+fall3d.bni/zoom animation palette
+mesh and multimesh extras

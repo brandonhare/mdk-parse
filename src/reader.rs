@@ -4,6 +4,11 @@ use std::io::Read;
 #[cfg(not(target_endian = "little"))]
 compile_error!("big endian not supported!");
 
+#[cfg(feature = "readranges")]
+thread_local! {
+	pub static READ_RANGE : std::rc::Rc<std::cell::RefCell<ranges::Ranges<usize>>> = Default::default();
+}
+
 #[derive(Clone)]
 pub struct Reader<'buf> {
 	reader: io::Cursor<&'buf [u8]>,
@@ -30,6 +35,15 @@ impl<'buf> Reader<'buf> {
 	pub fn new(buf: &'buf [u8]) -> Reader<'buf> {
 		Reader {
 			reader: io::Cursor::new(buf),
+		}
+	}
+
+	fn mark_read(&self, range: std::ops::Range<usize>) {
+		#[cfg(feature = "readranges")]
+		{
+			let origin = self.buf().as_ptr() as usize;
+			let range = range.start + origin..range.end + origin;
+			READ_RANGE.with(|ranges| ranges.borrow_mut().insert(range));
 		}
 	}
 
@@ -83,8 +97,10 @@ impl<'buf> Reader<'buf> {
 	}
 	pub fn try_get_unvalidated<T: Readable>(&mut self) -> Option<T> {
 		let mut buffer = T::new_buffer();
+		let pos = self.position();
 		let buffer_bytes = T::buffer_as_mut(&mut buffer);
 		self.reader.read_exact(buffer_bytes).ok()?;
+		self.mark_read(pos..pos + buffer_bytes.len());
 		let result = if cfg!(target_endian = "little") {
 			T::convert_little(buffer)
 		} else {
@@ -125,13 +141,34 @@ impl<'buf> Reader<'buf> {
 		);
 	}
 
+	pub fn try_align(&mut self, alignment: usize) -> Option<()> {
+		debug_assert!(alignment.is_power_of_two() && alignment > 0);
+		let mask = alignment - 1;
+		let pos = self.position();
+		let next_position = (self.position() + mask) & !mask;
+		let remainder = next_position - pos;
+		if remainder != 0 {
+			self.mark_read(pos..pos + next_position);
+			self.try_skip(remainder as isize)
+		} else {
+			Some(())
+		}
+	}
+	pub fn align(&mut self, alignment: usize) {
+		self.try_align(alignment).expect("failed to align");
+	}
+
 	pub fn slice(&mut self, size: usize) -> &'buf [u8] {
 		self.try_slice(size).expect("slice out of range")
 	}
 	pub fn try_slice(&mut self, size: usize) -> Option<&'buf [u8]> {
 		let pos = self.position();
 		self.try_skip(size as isize)?;
+		self.mark_read(pos..pos + size);
 		Some(&self.buf()[pos..pos + size])
+	}
+	pub fn remaining_slice(&mut self) -> &'buf [u8] {
+		self.slice(self.remaining_len())
 	}
 
 	pub fn str(&mut self, size: usize) -> &'buf str {

@@ -3,10 +3,15 @@ name = "mdk"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+readranges = ["dep:ranges"]
+default = []
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 base64 = "0.21.2"
 png = "0.17.7"
+ranges = { version = "0.3.3", optional = true }
 serde = { version = "1.0.183", features = ["derive"] }
 serde_json = "1.0.104"

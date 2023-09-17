@@ -4,6 +4,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::OsStr;
+use std::fmt::Write;
 use std::fs::{self, DirEntry};
 use std::io::BufWriter;
 use std::iter::once;
@@ -14,6 +15,7 @@ mod gltf;
 mod reader;
 use reader::Reader;
 
+#[derive(Clone, Debug)]
 struct OutputWriter {
 	path: PathBuf,
 }
@@ -494,6 +496,10 @@ fn parse_bni(path: &Path) {
 		}
 
 		if name == "INTRO1A" {
+			if data.len() < 0x600 {
+				println!("intro1a unexpected size {}", data.len());
+				continue;
+			}
 			let lut1 = reader.slice(0x300);
 			let lut2 = reader.slice(0x300);
 
@@ -825,7 +831,8 @@ fn parse_mto_subthing(arena_name: &str, buf: &[u8], output: &mut OutputWriter) {
 	// animations?
 	for (i, &(name, offset)) in animations.iter().enumerate() {
 		let end = all_offsets[all_offsets.iter().position(|o| *o == offset).unwrap() + 1];
-		let Some(anim) = try_parse_alienanim(&mut data.resized(offset as usize .. end as usize)) else {
+		let Some(anim) = try_parse_alienanim(&mut data.resized(offset as usize..end as usize))
+		else {
 			eprintln!("failed to parse anim {i} {arena_name}/{name}");
 			output.write(name, "", &data.buf()[offset as usize..end as usize]);
 			continue;
@@ -1140,23 +1147,20 @@ fn parse_dti(path: &Path) {
 	};
 
 	// data1 (arena and skybox data?)
+	let mut info_str;
 	{
 		let mut data = get_range(0);
 		let arena_index = data.u32();
 		assert_eq!(arena_index, 0);
-		let pos = data.vec3(); // player spawn position?
-		let angle = data.f32();
+		let player_start_pos = data.vec3();
+		let player_start_angle = data.f32();
 		let things = data.get_vec::<i32>(8); // skybox?
-		let more_things = data.get_vec::<i32>(16); // palette
+		let translucent_colours = data
+			.get::<[[i32; 4]; 4]>()
+			.map(|c| u32::from_be_bytes(c.map(|n| n as u8)));
 		assert!(data.remaining_len() == 0);
 
-		// todo what are these
-
-		output.write(
-			"data1",
-			"txt",
-			format!("{pos:?} {angle}\n{things:?}, {more_things:?}").as_bytes(),
-		);
+		info_str = format!("start pos: {player_start_pos:?}, start angle: {player_start_angle}\nthings: {things:3?}\ntranslucent colours: {translucent_colours:08x?}\n");
 	}
 
 	// data2  (teleport locations?)
@@ -1172,13 +1176,11 @@ fn parse_dti(path: &Path) {
 
 		// todo what are these
 
-		let result: String = things
-			.iter()
-			.map(|([a, arena_index], pos, angle)| {
-				format!("{a} {arena_index:2}, {pos:7?} {angle}\n")
-			})
-			.collect();
-		output.write("data2", "txt", result.as_bytes());
+		info_str.push_str("\nTeleport locations?:\n");
+		info_str.extend(things.iter().map(|([a, arena_index], pos, angle)| {
+			format!("{a} {arena_index:2}, {pos:7?} {angle}\n")
+		}));
+		output.write("info", "txt", info_str.as_bytes());
 	}
 
 	// entities (connnects? arena locations?)
@@ -1203,7 +1205,6 @@ fn parse_dti(path: &Path) {
 						.unwrap_or(entities_data.len())),
 			);
 
-			use std::fmt::Write;
 			let mut output_str = format!("{name}, {num}\n");
 
 			let num_entities = data.u32();
@@ -1292,14 +1293,56 @@ fn parse_cmi(path: &Path) {
 		entries
 	}
 
-	//let mut output = OutputWriter::new(path);
+	let mut output = OutputWriter::new(path);
 
 	let init_entries = read_entries(&mut data);
 	let object_entries = read_entries(&mut data);
 	let setup_entries = read_entries(&mut data);
 	let arena_entries = read_entries(&mut data);
 
-	println!("{filename}");
+	let make_output = |name: &str| {
+		let mut o = output.clone();
+		o.set_output_path(name, "");
+		let _ = fs::create_dir(&o.path);
+		o.path.push(name);
+		o
+	};
+
+	let mut output_init = make_output("init");
+	let mut output_object = make_output("object");
+	let mut output_setup = make_output("setup");
+	let mut output_arena = make_output("arena");
+
+	/*
+	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+	enum EntryType {
+		Init, Object, Setup, Arena
+	}
+	fn list<'a>(entries : &'a [(&'a str, usize)] ,ty : EntryType) -> impl Iterator<Item=(&'a str, usize, EntryType, usize)> + 'a{
+		entries.iter().map(move |(a,b)|(*a,*b,ty, 0))
+	}
+	let mut all_entries : Vec<_> = list(&init_entries, EntryType::Init).chain(list(&object_entries, EntryType::Object)).chain(list(&setup_entries, EntryType::Setup)).chain(list(&arena_entries, EntryType::Arena)).collect();
+	all_entries.sort_by_key(|(a,b,c,d)|*b);
+	for i in 0..all_entries.len() {
+		let next_start = all_entries.get(i+1).map(|e|e.1).unwrap_or(data.len());
+		all_entries[i].3 = next_start - all_entries[i].1;
+	}
+	all_entries.sort_by(|e1,e2|e1.2.cmp(&e2.2).then(e1.3.cmp(&e2.3)));
+
+	let mut summary = String::new();
+	for &(name, offset, ty, length) in &all_entries {
+		let output = match ty {
+			EntryType::Init => &mut output_init,
+			EntryType::Object => &mut output_object,
+			EntryType::Setup => &mut output_setup,
+			EntryType::Arena => &mut output_arena,
+		};
+		let mut data = data.resized(offset..offset + length);
+		output.write(name, "", data.remaining_slice());
+		writeln!(&mut summary, "{ty:6?} {length:6} {name}").unwrap();
+	}
+	output.write("summary", "txt", summary.as_bytes());
+	*/
 
 	// parse init entries
 	for &(name, offset) in &init_entries {}
@@ -1326,7 +1369,6 @@ fn parse_cmi(path: &Path) {
 		let sound1 = read_name(&mut data);
 		let sound2 = read_name(&mut data);
 		let offset = data.u32();
-		println!("{name} {sound1} {sound2} {offset}");
 		if offset == 0 {
 			continue;
 		}
@@ -1842,12 +1884,11 @@ fn main() {
 
 	let start_time = std::time::Instant::now();
 
-	for_all_ext("assets", "dti", parse_dti);
-	for_all_ext("assets", "bni", parse_bni);
-	for_all_ext("assets", "mto", parse_mto);
-	for_all_ext("assets", "sni", parse_sni);
-	for_all_ext("assets", "mti", parse_mti);
-
+	//for_all_ext("assets", "dti", parse_dti);
+	//for_all_ext("assets", "bni", parse_bni);
+	//for_all_ext("assets", "mto", parse_mto);
+	//for_all_ext("assets", "sni", parse_sni);
+	//for_all_ext("assets", "mti", parse_mti);
 	//for_all_ext("assets", "cmi", parse_cmi);
 
 	//for_all_ext("assets", "lbb", parse_lbb);

@@ -1148,19 +1148,22 @@ fn parse_dti(path: &Path) {
 
 	// data1 (arena and skybox data?)
 	let mut info_str;
+	let sky_info : [i32;8];
 	{
 		let mut data = get_range(0);
 		let arena_index = data.u32();
 		assert_eq!(arena_index, 0);
 		let player_start_pos = data.vec3();
 		let player_start_angle = data.f32();
-		let things = data.get_vec::<i32>(8); // skybox?
+		sky_info = data.get::<[i32;8]>();
 		let translucent_colours = data
 			.get::<[[i32; 4]; 4]>()
 			.map(|c| u32::from_be_bytes(c.map(|n| n as u8)));
 		assert!(data.remaining_len() == 0);
 
-		info_str = format!("start pos: {player_start_pos:?}, start angle: {player_start_angle}\nthings: {things:3?}\ntranslucent colours: {translucent_colours:08x?}\n");
+		info_str = format!("start pos: {player_start_pos:?}, start angle: {player_start_angle}\n\
+skybox: {sky_info:3?}\n\
+translucent colours: {translucent_colours:08x?}\n");
 	}
 
 	// data2  (teleport locations?)
@@ -1184,6 +1187,7 @@ fn parse_dti(path: &Path) {
 	}
 
 	// entities (connnects? arena locations?)
+	let mut bsp_entities_str = String::new();
 	{
 		let mut entities_data = get_range(2);
 
@@ -1205,7 +1209,7 @@ fn parse_dti(path: &Path) {
 						.unwrap_or(entities_data.len())),
 			);
 
-			let mut output_str = format!("{name}, {num}\n");
+			writeln!(bsp_entities_str, "{name}, {num}").unwrap();
 
 			let num_entities = data.u32();
 			for _ in 0..num_entities {
@@ -1213,21 +1217,22 @@ fn parse_dti(path: &Path) {
 				let arena_index = data.i32();
 				let c = data.i32();
 				let pos = data.vec3();
-				write!(output_str, "{entity_type},{arena_index:4},{c}, {pos:7?}, ").unwrap();
+				write!(bsp_entities_str, "{entity_type},{arena_index:4},{c}, {pos:7?}, ").unwrap();
 
 				if entity_type == 2 || entity_type == 4 {
 					let rest = data.str(12);
-					writeln!(&mut output_str, "{rest}").unwrap();
+					writeln!(bsp_entities_str, "{rest}").unwrap();
 				} else {
 					let rest = data.vec3();
-					writeln!(&mut output_str, "{rest:7?}").unwrap();
+					writeln!(bsp_entities_str, "{rest:7?}").unwrap();
 				}
 			}
 			assert_eq!(data.remaining_len(), 0);
 
-			output.write(name, "entities.txt", output_str.as_bytes());
+			bsp_entities_str.push('\n');
 		}
 	}
+	output.write("bsp_entities", "txt", bsp_entities_str.as_bytes());
 
 	// pal
 	let pal = {
@@ -1244,23 +1249,68 @@ fn parse_dti(path: &Path) {
 	// skybox
 	{
 		let mut skybox_data = get_range(4);
-		let height = 360;
-		let width = skybox_data.remaining_len() / height;
-		let skybox_pixels = skybox_data.slice(width * height);
 
-		let last = skybox_data.slice(12);
-		// todo what is this
+		let [sky_top_colour, sky_floor_colour, sky_y, sky_x, sky_width, sky_height, sky_reflected_top_colour, sky_reflected_bottom_colour] = sky_info;
+
+		let has_reflection = sky_reflected_top_colour >= 0;
+
+		let src_height = sky_height as usize;
+		let dest_width = sky_width as usize + 4;
+		let (dest_height, src_width) = if has_reflection {
+			assert!(src_height & 1 == 0);
+			(src_height / 2, dest_width * 2)
+		} else {
+			(src_height, dest_width)
+		};
+
+		let skybox_pixels = skybox_data.slice(src_width * src_height);
+
+		let filename_footer = skybox_data.slice(12);
 		assert_eq!(skybox_data.remaining_len(), 0);
+
+		let mut full_height = dest_height;
+
+		let mut pixels = Vec::new();
+		if !has_reflection {
+			pixels.extend(std::iter::repeat(sky_top_colour as u8).take(src_width * 64));
+			pixels.extend_from_slice(skybox_pixels);
+			pixels.extend(std::iter::repeat(sky_floor_colour as u8).take(src_width * 64));
+			full_height += 128;
+		} else {
+			let size = dest_width * dest_height;
+			assert_eq!(size*4, skybox_pixels.len());
+
+			let (top, bottom) = skybox_pixels.split_at(src_width * dest_height);
+
+			pixels.extend(std::iter::repeat(sky_top_colour as u8).take(dest_width * 64));
+			pixels.extend(top.chunks(dest_width).step_by(2).take(dest_height).flatten());
+			pixels.extend(std::iter::repeat(sky_floor_colour as u8).take(dest_width * 64));
+
+			pixels.extend(std::iter::repeat(sky_top_colour as u8).take(dest_width * 64));
+			pixels.extend(top.chunks(dest_width).skip(1).step_by(2).take(dest_height).flatten());
+			pixels.extend(std::iter::repeat(sky_floor_colour as u8).take(dest_width * 64));
+
+			pixels.extend(std::iter::repeat(sky_reflected_top_colour as u8).take(dest_width * 64));
+			pixels.extend(bottom.chunks(dest_width).skip(1).step_by(2).take(dest_height).flatten());
+			pixels.extend(std::iter::repeat(sky_reflected_bottom_colour as u8).take(dest_width * 64));
+			pixels.extend(std::iter::repeat(sky_reflected_top_colour as u8).take(dest_width * 64));
+			pixels.extend(bottom.chunks(dest_width).skip(1).step_by(2).take(dest_height).flatten());
+			pixels.extend(std::iter::repeat(sky_reflected_bottom_colour as u8).take(dest_width * 64));
+
+			full_height *= 4;
+			full_height += 64*8;
+		}
+
+		println!("{filename} {sky_x} {sky_y} {sky_width} {sky_height}");
 
 		output.set_output_path("skybox", "png");
 		save_png(
 			&output.path,
-			skybox_pixels,
-			width as u32,
-			height as u32,
+			&pixels,
+			dest_width as u32,
+			full_height as u32,
 			pal,
 		);
-		// todo wrapping and stuff
 	}
 }
 
@@ -1293,7 +1343,7 @@ fn parse_cmi(path: &Path) {
 		entries
 	}
 
-	let mut output = OutputWriter::new(path);
+	let output = OutputWriter::new(path);
 
 	let init_entries = read_entries(&mut data);
 	let object_entries = read_entries(&mut data);
@@ -1308,10 +1358,10 @@ fn parse_cmi(path: &Path) {
 		o
 	};
 
-	let mut output_init = make_output("init");
-	let mut output_object = make_output("object");
-	let mut output_setup = make_output("setup");
-	let mut output_arena = make_output("arena");
+	let output_init = make_output("init");
+	let output_object = make_output("object");
+	let output_setup = make_output("setup");
+	let output_arena = make_output("arena");
 
 	/*
 	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -1884,7 +1934,7 @@ fn main() {
 
 	let start_time = std::time::Instant::now();
 
-	//for_all_ext("assets", "dti", parse_dti);
+	for_all_ext("assets", "dti", parse_dti);
 	//for_all_ext("assets", "bni", parse_bni);
 	//for_all_ext("assets", "mto", parse_mto);
 	//for_all_ext("assets", "sni", parse_sni);

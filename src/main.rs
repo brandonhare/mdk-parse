@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-#![allow(unused_variables, unused_assignments)] // todo check
+#![allow(unused_variables, unused_assignments, unused_mut)] // todo check
 #![warn(trivial_casts, trivial_numeric_casts)]
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -34,6 +34,14 @@ impl OutputWriter {
 		//fs::create_dir_all(&dirname).unwrap();
 		dirname.push("a");
 		OutputWriter { path: dirname }
+	}
+	#[must_use]
+	fn push_dir(&self, dir: &str) -> Self {
+		let mut result = self.clone();
+		result.path.set_file_name(dir);
+		fs::create_dir_all(&result.path).unwrap();
+		result.path.push("a");
+		result
 	}
 	fn set_output_path(&mut self, asset_name: &str, ext: &str) -> &Path {
 		assert!(
@@ -102,7 +110,7 @@ impl<'a> Drop for DataFile<'a> {
 				println!("{}", self.0.display());
 				first = false;
 			}
-			println!("  {start:X}-{end:X} ({len})");
+			println!("  {start:06X}-{end:06X} ({len:7})");
 		}
 	}
 }
@@ -1148,22 +1156,24 @@ fn parse_dti(path: &Path) {
 
 	// data1 (arena and skybox data?)
 	let mut info_str;
-	let sky_info : [i32;8];
+	let sky_info: [i32; 8];
 	{
 		let mut data = get_range(0);
 		let arena_index = data.u32();
 		assert_eq!(arena_index, 0);
 		let player_start_pos = data.vec3();
 		let player_start_angle = data.f32();
-		sky_info = data.get::<[i32;8]>();
+		sky_info = data.get::<[i32; 8]>();
 		let translucent_colours = data
 			.get::<[[i32; 4]; 4]>()
 			.map(|c| u32::from_be_bytes(c.map(|n| n as u8)));
 		assert!(data.remaining_len() == 0);
 
-		info_str = format!("start pos: {player_start_pos:?}, start angle: {player_start_angle}\n\
+		info_str = format!(
+			"start pos: {player_start_pos:?}, start angle: {player_start_angle}\n\
 skybox: {sky_info:3?}\n\
-translucent colours: {translucent_colours:08x?}\n");
+translucent colours: {translucent_colours:08x?}\n"
+		);
 	}
 
 	// data2  (teleport locations?)
@@ -1217,7 +1227,11 @@ translucent colours: {translucent_colours:08x?}\n");
 				let arena_index = data.i32();
 				let c = data.i32();
 				let pos = data.vec3();
-				write!(bsp_entities_str, "{entity_type},{arena_index:4},{c}, {pos:7?}, ").unwrap();
+				write!(
+					bsp_entities_str,
+					"{entity_type},{arena_index:4},{c}, {pos:7?}, "
+				)
+				.unwrap();
 
 				if entity_type == 2 || entity_type == 4 {
 					let rest = data.str(12);
@@ -1250,7 +1264,8 @@ translucent colours: {translucent_colours:08x?}\n");
 	{
 		let mut skybox_data = get_range(4);
 
-		let [sky_top_colour, sky_floor_colour, sky_y, sky_x, sky_width, sky_height, sky_reflected_top_colour, sky_reflected_bottom_colour] = sky_info;
+		let [sky_top_colour, sky_floor_colour, sky_y, sky_x, sky_width, sky_height, sky_reflected_top_colour, sky_reflected_bottom_colour] =
+			sky_info;
 
 		let has_reflection = sky_reflected_top_colour >= 0;
 
@@ -1278,27 +1293,54 @@ translucent colours: {translucent_colours:08x?}\n");
 			full_height += 128;
 		} else {
 			let size = dest_width * dest_height;
-			assert_eq!(size*4, skybox_pixels.len());
+			assert_eq!(size * 4, skybox_pixels.len());
 
 			let (top, bottom) = skybox_pixels.split_at(src_width * dest_height);
 
 			pixels.extend(std::iter::repeat(sky_top_colour as u8).take(dest_width * 64));
-			pixels.extend(top.chunks(dest_width).step_by(2).take(dest_height).flatten());
+			pixels.extend(
+				top.chunks(dest_width)
+					.step_by(2)
+					.take(dest_height)
+					.flatten(),
+			);
 			pixels.extend(std::iter::repeat(sky_floor_colour as u8).take(dest_width * 64));
 
 			pixels.extend(std::iter::repeat(sky_top_colour as u8).take(dest_width * 64));
-			pixels.extend(top.chunks(dest_width).skip(1).step_by(2).take(dest_height).flatten());
+			pixels.extend(
+				top.chunks(dest_width)
+					.skip(1)
+					.step_by(2)
+					.take(dest_height)
+					.flatten(),
+			);
 			pixels.extend(std::iter::repeat(sky_floor_colour as u8).take(dest_width * 64));
 
 			pixels.extend(std::iter::repeat(sky_reflected_top_colour as u8).take(dest_width * 64));
-			pixels.extend(bottom.chunks(dest_width).skip(1).step_by(2).take(dest_height).flatten());
-			pixels.extend(std::iter::repeat(sky_reflected_bottom_colour as u8).take(dest_width * 64));
+			pixels.extend(
+				bottom
+					.chunks(dest_width)
+					.skip(1)
+					.step_by(2)
+					.take(dest_height)
+					.flatten(),
+			);
+			pixels
+				.extend(std::iter::repeat(sky_reflected_bottom_colour as u8).take(dest_width * 64));
 			pixels.extend(std::iter::repeat(sky_reflected_top_colour as u8).take(dest_width * 64));
-			pixels.extend(bottom.chunks(dest_width).skip(1).step_by(2).take(dest_height).flatten());
-			pixels.extend(std::iter::repeat(sky_reflected_bottom_colour as u8).take(dest_width * 64));
+			pixels.extend(
+				bottom
+					.chunks(dest_width)
+					.skip(1)
+					.step_by(2)
+					.take(dest_height)
+					.flatten(),
+			);
+			pixels
+				.extend(std::iter::repeat(sky_reflected_bottom_colour as u8).take(dest_width * 64));
 
 			full_height *= 4;
-			full_height += 64*8;
+			full_height += 64 * 8;
 		}
 
 		println!("{filename} {sky_x} {sky_y} {sky_width} {sky_height}");
@@ -1327,104 +1369,136 @@ fn parse_cmi(path: &Path) {
 	let filesize2 = data.u32();
 	assert_eq!(filesize, filesize2 + 12, "filesizes do not match");
 
-	fn read_name<'a>(data: &mut Reader<'a>) -> &'a str {
-		let name_len = data.u8();
-		data.str(name_len as usize)
+	let mut init_entries = Vec::new();
+	let mut mesh_entries = Vec::new();
+	let mut setup_entries = Vec::new();
+	let mut arena_header_entries = Vec::new();
+
+	// read offsets
+	for entries in [
+		&mut init_entries,
+		&mut mesh_entries,
+		&mut setup_entries,
+		&mut arena_header_entries,
+	] {
+		let count = data.u32();
+		entries.extend((0..count).map(|_| {
+			let name_len = data.u8();
+			let name = data.str(name_len as usize);
+			let offset = data.u32();
+			let data = data.resized_pos(.., offset as usize);
+			(name, data)
+		}));
+		entries.retain(|e| e.1.position() != 0);
 	}
 
-	fn read_entries<'a>(data: &mut Reader<'a>) -> Vec<(&'a str, usize)> {
-		let mut entries = Vec::new();
-		let num_entries = data.u32();
-		for j in 0..num_entries {
-			let name = read_name(data);
+	// process arena header entries (to get data offsets)
+	let (arena_header_infos, mut arena_data_entries): (Vec<_>, Vec<_>) = arena_header_entries
+		.iter()
+		.map(|(name, data)| {
+			let mut data = data.clone();
+			let str1_len = data.u8() as usize;
+			let str1 = data.str(str1_len);
+			let music_len = data.u8() as usize;
+			let music_name = data.str(music_len);
 			let offset = data.u32() as usize;
-			entries.push((name, offset));
+
+			let header_info = (*name, str1, music_name);
+			let data_info = (*name, data.resized_pos(.., offset));
+			(header_info, data_info)
+		})
+		.unzip();
+
+	// calculate bounds (todo debug)
+	{
+		let mut all_entries: Vec<_> = [
+			init_entries.iter_mut(),
+			mesh_entries.iter_mut(),
+			setup_entries.iter_mut(),
+			arena_header_entries.iter_mut(),
+			arena_data_entries.iter_mut(),
+		]
+		.into_iter()
+		.flatten()
+		.collect();
+		all_entries.sort_by_key(|(_name, reader)| reader.position());
+		for i in 0..all_entries.len().saturating_sub(1) {
+			let mut next_start = all_entries[i + 1].1.position();
+			let reader = &mut all_entries[i].1;
+			let current_start = reader.position();
+			if current_start == 0 {
+				next_start = 0;
+			}
+			reader.resize_pos(..next_start, current_start);
 		}
-		entries
 	}
 
 	let output = OutputWriter::new(path);
 
-	let init_entries = read_entries(&mut data);
-	let object_entries = read_entries(&mut data);
-	let setup_entries = read_entries(&mut data);
-	let arena_entries = read_entries(&mut data);
-
-	let make_output = |name: &str| {
-		let mut o = output.clone();
-		o.set_output_path(name, "");
-		let _ = fs::create_dir(&o.path);
-		o.path.push(name);
-		o
-	};
-
-	let output_init = make_output("init");
-	let output_object = make_output("object");
-	let output_setup = make_output("setup");
-	let output_arena = make_output("arena");
-
-	/*
-	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-	enum EntryType {
-		Init, Object, Setup, Arena
-	}
-	fn list<'a>(entries : &'a [(&'a str, usize)] ,ty : EntryType) -> impl Iterator<Item=(&'a str, usize, EntryType, usize)> + 'a{
-		entries.iter().map(move |(a,b)|(*a,*b,ty, 0))
-	}
-	let mut all_entries : Vec<_> = list(&init_entries, EntryType::Init).chain(list(&object_entries, EntryType::Object)).chain(list(&setup_entries, EntryType::Setup)).chain(list(&arena_entries, EntryType::Arena)).collect();
-	all_entries.sort_by_key(|(a,b,c,d)|*b);
-	for i in 0..all_entries.len() {
-		let next_start = all_entries.get(i+1).map(|e|e.1).unwrap_or(data.len());
-		all_entries[i].3 = next_start - all_entries[i].1;
-	}
-	all_entries.sort_by(|e1,e2|e1.2.cmp(&e2.2).then(e1.3.cmp(&e2.3)));
-
-	let mut summary = String::new();
-	for &(name, offset, ty, length) in &all_entries {
-		let output = match ty {
-			EntryType::Init => &mut output_init,
-			EntryType::Object => &mut output_object,
-			EntryType::Setup => &mut output_setup,
-			EntryType::Arena => &mut output_arena,
-		};
-		let mut data = data.resized(offset..offset + length);
-		output.write(name, "", data.remaining_slice());
-		writeln!(&mut summary, "{ty:6?} {length:6} {name}").unwrap();
-	}
-	output.write("summary", "txt", summary.as_bytes());
-	*/
-
-	// parse init entries
-	for &(name, offset) in &init_entries {}
-	// parse object entries
-	for &(name, offset) in &object_entries {}
-
-	// parse setup entries
-	for &(name, offset) in &setup_entries {
-		if offset == 0 {
-			continue;
+	// process init entries
+	{
+		let mut init_output = output.push_dir("init");
+		for (name, mut data) in init_entries {
+			init_output.write(name, "", data.remaining_slice());
 		}
-		data.set_position(offset);
-		let num = data.u32();
-		let num_bytes = num.to_le_bytes();
-		//println!("{name} {num} {num_bytes:?}");
 	}
 
-	// parse arena entries
-	for &(name, offset) in &arena_entries {
-		if offset == 0 {
-			continue;
+	// process mesh entries
+	{
+		let mut mesh_output = output.push_dir("meshes");
+		for (name, mut data) in mesh_entries {
+			let mesh_type = data.i32();
+			if mesh_type == 0 {
+				let mesh = parse_mesh(&mut data, true);
+				save_mesh(name, &mesh, &[], &mut mesh_output);
+			} else if mesh_type == 1 {
+				let mesh = try_parse_multimesh(&mut data).expect("failed to parse multimesh");
+				save_multimesh(name, &mesh, &mut mesh_output);
+			} else {
+				panic!("invalid mesh type for {name} in {filename}: {mesh_type}");
+			}
+
+			// todo is this data referenced anywhere?
+
+			/*
+			let rest = data.remaining_slice();
+			if !rest.is_empty() {
+				mesh_output.write(name, "rest", rest);
+			}
+			*/
 		}
-		data.set_position(offset);
-		let sound1 = read_name(&mut data);
-		let sound2 = read_name(&mut data);
-		let offset = data.u32();
-		if offset == 0 {
-			continue;
-		}
-		data.set_position(offset as usize);
 	}
-	//println!();
+
+	// process arena_entries
+	{
+		let mut arena_output = output.push_dir("arenas");
+		let mut arena_summary = String::new();
+		for (&(name, mus1, mus2), (data_name, mut data)) in
+			arena_header_infos.iter().zip(arena_data_entries)
+		{
+			assert_eq!(name, data_name);
+			writeln!(
+				arena_summary,
+				"{name}, '{mus1}', '{mus2}' - {} @ {}",
+				data.remaining_len(),
+				data.position()
+			)
+			.unwrap();
+			let data = data.remaining_slice();
+			if !data.is_empty() {
+				arena_output.write(name, "", data);
+			}
+		}
+		arena_output.write("summary", "txt", arena_summary.as_bytes());
+	}
+
+	// process setup entries
+	{
+		let mut setup_output = output.push_dir("setup");
+		for (name, mut data) in setup_entries {
+			setup_output.write(name, "", data.remaining_slice());
+		}
+	}
 }
 
 fn save_anim(name: &str, anims: &[Anim], output: &mut OutputWriter, pal: PalRef) {
@@ -1799,9 +1873,9 @@ fn save_mesh(name: &str, mesh: &Mesh, textures: &[ImageRef], output: &mut Output
 	output.write(name, "gltf", result.as_bytes());
 }
 
-fn save_multimesh(name: &str, meshes: &Multimesh, output: &mut OutputWriter) {
+fn save_multimesh(name: &str, multimesh: &Multimesh, output: &mut OutputWriter) {
 	let mut gltf = gltf::Gltf::new(name.to_owned());
-	for mesh in &meshes.meshes {
+	for mesh in &multimesh.meshes {
 		let mut verts = mesh.mesh.verts.clone();
 		for p in &mut verts {
 			for (a, b) in p.iter_mut().zip(mesh.origin.iter()) {
@@ -1814,7 +1888,7 @@ fn save_multimesh(name: &str, meshes: &Multimesh, output: &mut OutputWriter) {
 				.mesh
 				.tris
 				.iter()
-				.flat_map(|tri| tri.indices)
+				.flat_map(|tri|[tri.indices[0], tri.indices[2], tri.indices[1]]) // todo hack why are multimeshes flipped
 				.collect::<Vec<_>>(),
 		);
 		let mut submesh_name: &str = &mesh.name;
@@ -1934,12 +2008,12 @@ fn main() {
 
 	let start_time = std::time::Instant::now();
 
-	for_all_ext("assets", "dti", parse_dti);
+	//for_all_ext("assets", "dti", parse_dti);
 	//for_all_ext("assets", "bni", parse_bni);
 	//for_all_ext("assets", "mto", parse_mto);
 	//for_all_ext("assets", "sni", parse_sni);
 	//for_all_ext("assets", "mti", parse_mti);
-	//for_all_ext("assets", "cmi", parse_cmi);
+	for_all_ext("assets", "cmi", parse_cmi);
 
 	//for_all_ext("assets", "lbb", parse_lbb);
 	//for_all_ext("assets", "flc", parse_video);

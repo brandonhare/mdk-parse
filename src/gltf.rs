@@ -1,6 +1,9 @@
+use serde::{Serialize, Serializer};
 use std::mem;
 
-use serde::{Serialize, Serializer};
+fn swizzle(pos: &[f32; 3]) -> [f32; 3] {
+	[pos[0], pos[2], -pos[1]]
+}
 
 #[derive(Serialize)]
 struct Asset {
@@ -247,7 +250,10 @@ impl Gltf {
 	}
 
 	pub fn add_positions(&mut self, data: &[[f32; 3]]) -> AccessorIndex {
-		self.add_data(data, PrimitiveUsage::Positions)
+		self.add_data(
+			&data.iter().map(swizzle).collect::<Vec<[f32; 3]>>(),
+			PrimitiveUsage::Positions,
+		)
 	}
 	pub fn add_uvs(&mut self, data: &[[f32; 2]]) -> AccessorIndex {
 		self.add_data(data, PrimitiveUsage::UVs)
@@ -316,7 +322,7 @@ impl Gltf {
 	}
 
 	pub fn set_mesh_position(&mut self, mesh: MeshIndex, position: [f32; 3]) {
-		self.nodes[mesh.0 + 1].translation = Some(position);
+		self.nodes[mesh.0 + 1].translation = Some(swizzle(&position));
 	}
 
 	pub fn add_mesh_simple(

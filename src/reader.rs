@@ -50,6 +50,9 @@ impl<'buf> Reader<'buf> {
 	pub fn resize(&mut self, range: impl std::ops::RangeBounds<usize>) {
 		*self = self.resized(range);
 	}
+	pub fn resize_pos(&mut self, range: impl std::ops::RangeBounds<usize>, new_pos: usize) {
+		*self = self.resized_pos(range, new_pos);
+	}
 	#[must_use]
 	pub fn resized(&self, range: impl std::ops::RangeBounds<usize>) -> Self {
 		let start = match range.start_bound() {
@@ -113,7 +116,10 @@ impl<'buf> Reader<'buf> {
 		let start = self.position();
 		let end = start + std::mem::size_of::<T::Buffer>();
 		let Some(result) = self.try_get_unvalidated::<T>() else {
-			panic!("failed to read bytes {start}..{end} (buffer size {})", self.len());
+			panic!(
+				"failed to read bytes {start}..{end} (buffer size {})",
+				self.len()
+			);
 		};
 		if !result.validate() {
 			panic!("invalid value '{result:?}' at {start}..{end}");

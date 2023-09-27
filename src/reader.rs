@@ -111,7 +111,6 @@ impl<'buf> Reader<'buf> {
 		};
 		Some(result)
 	}
-
 	pub fn get<T: Readable + std::fmt::Debug>(&mut self) -> T {
 		let start = self.position();
 		let end = start + std::mem::size_of::<T::Buffer>();
@@ -124,6 +123,17 @@ impl<'buf> Reader<'buf> {
 		if !result.validate() {
 			panic!("invalid value '{result:?}' at {start}..{end}");
 		}
+		result
+	}
+	pub fn get_unvalidated<T: Readable + std::fmt::Debug>(&mut self) -> T {
+		let start = self.position();
+		let end = start + std::mem::size_of::<T::Buffer>();
+		let Some(result) = self.try_get_unvalidated::<T>() else {
+			panic!(
+				"failed to read bytes {start}..{end} (buffer size {})",
+				self.len()
+			);
+		};
 		result
 	}
 
@@ -175,6 +185,14 @@ impl<'buf> Reader<'buf> {
 	}
 	pub fn remaining_slice(&mut self) -> &'buf [u8] {
 		self.slice(self.remaining_len())
+	}
+
+	pub fn pascal_str(&mut self) -> &'buf str {
+		self.try_pascal_str().expect("invalid string")
+	}
+	pub fn try_pascal_str(&mut self) -> Option<&'buf str> {
+		let length = self.try_u8()?;
+		self.try_str(length as usize)
 	}
 
 	pub fn str(&mut self, size: usize) -> &'buf str {
@@ -362,10 +380,10 @@ fn validate_int<T>(_: T) -> bool {
 	true
 }
 fn validate_float32(f: f32) -> bool {
-	f.is_finite() && (-100000.0..100000.0).contains(&f)
+	f.is_finite() && (-1000000.0..=1000000.0).contains(&f)
 }
 fn validate_float64(f: f64) -> bool {
-	f.is_finite() && (-100000.0..100000.0).contains(&f)
+	f.is_finite() && (-1000000.0..=1000000.0).contains(&f)
 }
 
 macro_rules! allNums {

@@ -11,6 +11,7 @@ use std::iter::once;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+mod cmi_bytecode;
 mod gltf;
 mod reader;
 use reader::Reader;
@@ -1383,8 +1384,7 @@ fn parse_cmi(path: &Path) {
 	] {
 		let count = data.u32();
 		entries.extend((0..count).map(|_| {
-			let name_len = data.u8();
-			let name = data.str(name_len as usize);
+			let name = data.pascal_str();
 			let offset = data.u32();
 			let data = data.resized_pos(.., offset as usize);
 			(name, data)
@@ -1397,10 +1397,8 @@ fn parse_cmi(path: &Path) {
 		.iter()
 		.map(|(name, data)| {
 			let mut data = data.clone();
-			let str1_len = data.u8() as usize;
-			let str1 = data.str(str1_len);
-			let music_len = data.u8() as usize;
-			let music_name = data.str(music_len);
+			let str1 = data.pascal_str();
+			let music_name = data.pascal_str();
 			let offset = data.u32() as usize;
 
 			let header_info = (*name, str1, music_name);
@@ -1484,9 +1482,11 @@ fn parse_cmi(path: &Path) {
 				data.position()
 			)
 			.unwrap();
+
 			let data = data.remaining_slice();
 			if !data.is_empty() {
-				arena_output.write(name, "", data);
+				let cmi = cmi_bytecode::parse_cmi(data);
+				arena_output.write(name, "txt", cmi.as_bytes());
 			}
 		}
 		arena_output.write("summary", "txt", arena_summary.as_bytes());

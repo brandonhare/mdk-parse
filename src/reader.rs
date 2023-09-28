@@ -87,6 +87,9 @@ impl<'buf> Reader<'buf> {
 	pub fn remaining_len(&self) -> usize {
 		self.len() - self.position()
 	}
+	pub fn is_empty(&self) -> bool {
+		self.remaining_len() == 0
+	}
 
 	pub fn position(&self) -> usize {
 		self.reader.position() as usize

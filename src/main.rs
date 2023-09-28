@@ -1435,9 +1435,15 @@ fn parse_cmi(path: &Path) {
 
 	// process init entries
 	{
-		let mut init_output = output.push_dir("init");
+		let mut init_output = None;
 		for (name, mut data) in init_entries {
-			init_output.write(name, "", data.remaining_slice());
+			let start_index = data.position();
+			if !data.is_empty() {
+				let cmi = cmi_bytecode::parse_cmi(start_index, &mut data);
+				let init_output = init_output.get_or_insert_with(|| output.push_dir("init"));
+				init_output.write(name, "txt", cmi.as_bytes());
+			}
+			//init_output.write(name, "", data.remaining_slice());
 		}
 	}
 
@@ -1483,9 +1489,9 @@ fn parse_cmi(path: &Path) {
 			)
 			.unwrap();
 
-			let data = data.remaining_slice();
+			let start_index = data.position();
 			if !data.is_empty() {
-				let cmi = cmi_bytecode::parse_cmi(data);
+				let cmi = cmi_bytecode::parse_cmi(start_index, &mut data);
 				arena_output.write(name, "txt", cmi.as_bytes());
 			}
 		}
@@ -1496,7 +1502,12 @@ fn parse_cmi(path: &Path) {
 	{
 		let mut setup_output = output.push_dir("setup");
 		for (name, mut data) in setup_entries {
-			setup_output.write(name, "", data.remaining_slice());
+			let start_index = data.position();
+			if !data.is_empty() {
+				let cmi = cmi_bytecode::parse_cmi(start_index, &mut data);
+				setup_output.write(name, "txt", cmi.as_bytes());
+			}
+			//setup_output.write(name, "", data.remaining_slice());
 		}
 	}
 }

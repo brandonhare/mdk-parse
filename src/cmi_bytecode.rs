@@ -11,18 +11,17 @@ fn var_target(index: u8) -> &'static str {
 	}
 }
 
-pub fn parse_cmi(code: &[u8]) -> String {
-	let mut reader = Reader::new(code);
-	let mut summary = String::new();
+pub fn parse_cmi(start_offset: usize, reader: &mut Reader) -> String {
+	let mut summary = format!("Start offset: {start_offset}\n");
 	macro_rules! w {
 		()=>{};
-		($arg:expr $(,$rest:expr)*) => {
+		($arg:expr $(,$rest:expr)* $(,)?) => {
 			write!(summary, $arg $(,$rest)*).unwrap()
 		};
 	}
 	macro_rules! wl {
 		()=>{summary.push('\n');};
-		($arg:expr $(,$rest:expr)*) => {
+		($arg:expr $(,$rest:expr)* $(,)?) => {
 			writeln!(summary, $arg $(,$rest)*).unwrap()
 		};
 	}
@@ -219,21 +218,23 @@ pub fn parse_cmi(code: &[u8]) -> String {
 				wl!("Random code jump] offsets: {nums:?}");
 			}
 			_ => {
-				let pos = reader.position();
-				let remaining = reader.remaining_slice();
-				let remaining = &remaining[..remaining
-					.iter()
-					.position(|&c| c == 0xFF)
-					.unwrap_or(remaining.len())];
-				w!(
-					"?]\nRemaining Stream ({} bytes starting at {}):\n",
-					remaining.len(),
-					reader.position()
-				);
-				for &b in remaining {
+				let remaining_start_offset = reader.position();
+				wl!("?]\nRemaining Stream (starting at {remaining_start_offset}):");
+
+				loop {
+					let b = reader.u8();
+					if b == 0xFF {
+						break;
+					}
 					w!("{b:02X}");
 				}
-				wl!();
+				let end_offset = reader.position();
+				wl!(
+					"\nStream finished at {end_offset}, {} total bytes ({} remaining stream bytes, {} unused in remainder of chunk)",
+					end_offset - start_offset,
+					end_offset - remaining_start_offset,
+					reader.remaining_len(),
+				);
 				break;
 			}
 		}

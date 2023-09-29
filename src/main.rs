@@ -1373,14 +1373,14 @@ fn parse_cmi(path: &Path) {
 	let mut init_entries = Vec::new();
 	let mut mesh_entries = Vec::new();
 	let mut setup_entries = Vec::new();
-	let mut arena_header_entries = Vec::new();
+	let mut arena_entries = Vec::new();
 
 	// read offsets
 	for entries in [
 		&mut init_entries,
 		&mut mesh_entries,
 		&mut setup_entries,
-		&mut arena_header_entries,
+		&mut arena_entries,
 	] {
 		let count = data.u32();
 		entries.extend((0..count).map(|_| {
@@ -1392,58 +1392,15 @@ fn parse_cmi(path: &Path) {
 		entries.retain(|e| e.1.position() != 0);
 	}
 
-	// process arena header entries (to get data offsets)
-	let (arena_header_infos, mut arena_data_entries): (Vec<_>, Vec<_>) = arena_header_entries
-		.iter()
-		.map(|(name, data)| {
-			let mut data = data.clone();
-			let str1 = data.pascal_str();
-			let music_name = data.pascal_str();
-			let offset = data.u32() as usize;
-
-			let header_info = (*name, str1, music_name);
-			let data_info = (*name, data.resized_pos(.., offset));
-			(header_info, data_info)
-		})
-		.unzip();
-
-	// calculate bounds (todo debug)
-	{
-		let mut all_entries: Vec<_> = [
-			init_entries.iter_mut(),
-			mesh_entries.iter_mut(),
-			setup_entries.iter_mut(),
-			arena_header_entries.iter_mut(),
-			arena_data_entries.iter_mut(),
-		]
-		.into_iter()
-		.flatten()
-		.collect();
-		all_entries.sort_by_key(|(_name, reader)| reader.position());
-		for i in 0..all_entries.len().saturating_sub(1) {
-			let mut next_start = all_entries[i + 1].1.position();
-			let reader = &mut all_entries[i].1;
-			let current_start = reader.position();
-			if current_start == 0 {
-				next_start = 0;
-			}
-			reader.resize_pos(..next_start, current_start);
-		}
-	}
-
 	let output = OutputWriter::new(path);
 
 	// process init entries
 	{
 		let mut init_output = None;
 		for (name, mut data) in init_entries {
-			let start_index = data.position();
-			if !data.is_empty() {
-				let cmi = cmi_bytecode::parse_cmi(start_index, &mut data);
-				let init_output = init_output.get_or_insert_with(|| output.push_dir("init"));
-				init_output.write(name, "txt", cmi.as_bytes());
-			}
-			//init_output.write(name, "", data.remaining_slice());
+			let cmi = cmi_bytecode::parse_cmi(filename, name, &mut data);
+			let init_output = init_output.get_or_insert_with(|| output.push_dir("init"));
+			init_output.write(name, "txt", cmi.as_bytes());
 		}
 	}
 
@@ -1461,53 +1418,34 @@ fn parse_cmi(path: &Path) {
 			} else {
 				panic!("invalid mesh type for {name} in {filename}: {mesh_type}");
 			}
-
-			// todo is this data referenced anywhere?
-
-			/*
-			let rest = data.remaining_slice();
-			if !rest.is_empty() {
-				mesh_output.write(name, "rest", rest);
-			}
-			*/
 		}
-	}
-
-	// process arena_entries
-	{
-		let mut arena_output = output.push_dir("arenas");
-		let mut arena_summary = String::new();
-		for (&(name, mus1, mus2), (data_name, mut data)) in
-			arena_header_infos.iter().zip(arena_data_entries)
-		{
-			assert_eq!(name, data_name);
-			writeln!(
-				arena_summary,
-				"{name}, '{mus1}', '{mus2}' - {} @ {}",
-				data.remaining_len(),
-				data.position()
-			)
-			.unwrap();
-
-			let start_index = data.position();
-			if !data.is_empty() {
-				let cmi = cmi_bytecode::parse_cmi(start_index, &mut data);
-				arena_output.write(name, "txt", cmi.as_bytes());
-			}
-		}
-		arena_output.write("summary", "txt", arena_summary.as_bytes());
 	}
 
 	// process setup entries
 	{
 		let mut setup_output = output.push_dir("setup");
 		for (name, mut data) in setup_entries {
-			let start_index = data.position();
-			if !data.is_empty() {
-				let cmi = cmi_bytecode::parse_cmi(start_index, &mut data);
-				setup_output.write(name, "txt", cmi.as_bytes());
-			}
-			//setup_output.write(name, "", data.remaining_slice());
+			let cmi = cmi_bytecode::parse_cmi(filename, name, &mut data);
+			setup_output.write(name, "txt", cmi.as_bytes());
+		}
+	}
+
+	// process arena_entries
+	{
+		let mut arena_output = output.push_dir("arenas");
+		for (name, mut data) in arena_entries {
+			let str1 = data.pascal_str();
+			let music = data.pascal_str();
+			let offset = data.u32() as usize;
+
+			data.set_position(offset);
+			let cmi = cmi_bytecode::parse_cmi(filename, name, &mut data);
+
+			arena_output.write(
+				name,
+				"txt",
+				format!("name: {name}, thing: \"{str1}\", music: \"{music}\"\n\n{cmi}").as_bytes(),
+			);
 		}
 	}
 }

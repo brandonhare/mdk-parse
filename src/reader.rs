@@ -383,10 +383,10 @@ fn validate_int<T>(_: T) -> bool {
 	true
 }
 fn validate_float32(f: f32) -> bool {
-	f.is_finite() && (-1000000.0..=1000000.0).contains(&f)
+	f.is_finite() && (-10000000.0..=10000000.0).contains(&f)
 }
 fn validate_float64(f: f64) -> bool {
-	f.is_finite() && (-1000000.0..=1000000.0).contains(&f)
+	f.is_finite() && (-10000000.0..=10000000.0).contains(&f)
 }
 
 macro_rules! allNums {

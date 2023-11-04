@@ -218,9 +218,10 @@ impl<'buf> Reader<'buf> {
 		};
 
 		if !buf.iter().all(|&c| {
-			matches!(c,
-				b'.' | b'-' | b'$' | b'0'..=b'9' | b'A'..=b'Z' | b'_' | b'a'..=b'z'
-			)
+			matches!(c, b' '..=b'~')
+			/*matches!(c,
+				b' ' | b'.' | b'-' | b'$' | b'0'..=b'9' | b'?' | b'A'..=b'Z' | b'_' | b'a'..=b'z'
+			)*/
 		}) {
 			return None;
 		}

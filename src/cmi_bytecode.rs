@@ -34,6 +34,37 @@ struct BranchInfo {
 }
 impl std::fmt::Display for BranchInfo {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		/*
+
+		if (!condition){
+			if code == 0xFE {
+				call(offset2);
+			} else {
+				continue;
+			}
+		} else {
+			if (code == 0xFC | 0xFE){
+				call(offset1);
+			else if (code == 0xFD) {
+				return;
+			} else {
+				jump(offset1);
+			}
+		}
+
+		 */
+		match self.code {
+			0xFE => write!(
+				f,
+				"{{ call block_{} ({:X}) }} else {{ call block_{} ({:X}) }}",
+				self.index1, self.offset1, self.index2, self.offset2
+			),
+			0xFC => write!(f, "{{ call block_{} ({:X}) }}", self.index1, self.offset1),
+			0xFD => write!(f, "{{ return }}"),
+			0xC => write!(f, "{{ goto block_{} ({:X}) }}", self.index1, self.offset1),
+			code => write!(f, "{{ unknown (code: {code:2X}) }}"),
+		}
+		/*
 		match self.code {
 			0xFE => write!(
 				f,
@@ -44,6 +75,7 @@ impl std::fmt::Display for BranchInfo {
 			0xFD => write!(f, "target: (return)"),
 			code => write!(f, "code: {code:2X}"),
 		}
+		*/
 	}
 }
 fn branch_code(blocks: &mut Vec<u32>, reader: &mut Reader) -> BranchInfo {
@@ -110,14 +142,18 @@ struct VarOrData {
 impl std::fmt::Display for VarOrData {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		if self.target == 3 {
-			write!(f, "value: {}", self.value)
+			self.value.fmt(f)
+		//write!(f, "value: {}", self.value)
 		} else {
+			write!(f, "{}_vars[{}]", var_target(self.target), self.index)
+			/*
 			write!(
 				f,
 				"target: {}, index: {}",
 				var_target(self.target),
 				self.index
 			)
+			*/
 		}
 	}
 }
@@ -135,6 +171,30 @@ fn var_or_data(reader: &mut Reader) -> VarOrData {
 		value,
 		index,
 	}
+}
+fn simple_var(reader: &mut Reader) -> VarOrData {
+	let target = reader.u8();
+	let index = reader.u8();
+	VarOrData {
+		target,
+		value: 0.0,
+		index,
+	}
+}
+struct FlagVar {
+	target: u8,
+	index: u8,
+}
+impl std::fmt::Display for FlagVar {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(f, "{}_flags[{}]", var_target(self.target), self.index)
+	}
+}
+fn flag_var(reader: &mut Reader) -> FlagVar {
+	let target = reader.u8();
+	let index = reader.u8();
+	//assert_eq!(index & !31, 0, "flag value out of range");
+	FlagVar { target, index }
 }
 
 pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
@@ -176,7 +236,7 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 			}
 			w!("[{cmd:02X} ");
 			match cmd {
-				0 | 7 | 30 => {
+				0x0 | 0x7 | 0x1E => {
 					wl!("Invalid!]");
 					break;
 				}
@@ -303,13 +363,40 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 					let branch = branch_code(&mut blocks, reader);
 					wl!("Branch with value?] value: {value}, {branch}");
 				}
+				0x13 => {
+					wl!("Clear someAnimField3]");
+				}
+				0x14 => {
+					wl!("Clear somePath]");
+				}
+				0x15 => {
+					let index = reader.i32();
+					wl!("Set someIndex] value: {index}");
+				}
 				0x16 => {
 					let branch = branch_code(&mut blocks, reader);
 					wl!("Branch on has parts] {branch}");
 				}
+				0x17 => {
+					let set = reader.u8() != 0;
+					wl!("Set flags[1] and some data] set: {set}");
+				}
+				0x18 => {
+					let value = reader.u8();
+					let name = reader.pascal_str();
+					wl!("Set someName4] value: {value}, name: {name}");
+				}
 				0x19 => {
 					let name = reader.pascal_str();
 					wl!("Set some name] name: {name}");
+				}
+				0x1A => {
+					let name = reader.pascal_str();
+					wl!("Set someName3] name: {name}");
+				}
+				0x1B => {
+					let branch = branch_code(&mut blocks, reader);
+					wl!("Branch on some global var] {branch}");
 				}
 				0x1C => {
 					let offset = reader.u32();
@@ -381,6 +468,10 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 					let var_data = var_or_data(reader);
 					wl!("Anim facing yaw value] {var_data}");
 				}
+				0x29 => {
+					let index = reader.u8();
+					wl!("Some sniper thing] index: {index}");
+				}
 				0x2A => {
 					let mut name = reader.pascal_str();
 					if name.is_empty() {
@@ -424,12 +515,20 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 				0x32..=0x35 => {
 					let index = (cmd - 0x31) % 4;
 					let var_data = var_or_data(reader);
-					wl!("Set entity someDataValue] index: {index}, {var_data}");
+					wl!("Set entity someCmiDataValue] values[{index}] = {var_data}");
 				}
 				0x36 => {
 					let comp = compare(reader);
 					let branch = branch_code(&mut blocks, reader);
 					wl!("Branch on distance to something] {comp}, {branch}");
+				}
+				0x37 => {
+					let var_data = var_or_data(reader);
+					wl!("Set entity someCmiDataValue] values[5] = {var_data}");
+				}
+				0x38 => {
+					let value = reader.i16();
+					wl!("Add someCmiField10] delta: {value}");
 				}
 				0x39 => {
 					let distance = reader.u16();
@@ -471,50 +570,57 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 					let branch = branch_code(&mut blocks, reader);
 					wl!("Branch on angle to player] {comp}, {branch}");
 				}
+				0x3F => {
+					let set = reader.u8() == 0;
+					wl!("{} flag 0x10]", if set { "Set" } else { "Clear" });
+				}
 				0x40 => {
 					let var_data = var_or_data(reader);
 					wl!("Delay] {var_data}");
 				}
 				0x41 => {
-					let var_target = var_target(reader.u8());
-					let var_index = reader.u8();
+					let var = simple_var(reader);
 					let value = reader.f32();
-					wl!("Set Variable] target: {var_target}, index: {var_index}, value: {value}");
+					wl!("Set Variable] {var} = {value}");
 				}
 				0x42 => {
-					let var_target = var_target(reader.u8());
-					let var_index = reader.u8();
+					let var = simple_var(reader);
 					let value = reader.f32();
-					wl!(
-						"Add to variable] target: {var_target}, index: {var_index}, value: {value}"
-					);
+					wl!("Add to variable] {var} += {value}");
 				}
 				0x43 => {
-					let var_target = var_target(reader.u8());
-					let var_index = reader.u8();
+					let var = simple_var(reader);
 					let comp = compare(reader);
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Branch on variable compare] target: {var_target}, index: {var_index}, {comp}, {branch}");
+					wl!("Branch on variable compare] {var}, {comp}, {branch}");
 				}
 				0x44 => {
-					let flag_target = var_target(reader.u8());
-					let flag_index = reader.u8() & 0x1F;
-					wl!("Set flag] target: {flag_target}, flag index: {flag_index}");
+					let flag = flag_var(reader);
+					wl!("Set flag var] {flag} = true");
 				}
 				0x45 => {
-					let flag_target = var_target(reader.u8());
-					let flag_index = reader.u8() & 0x1F;
-					wl!("Clear flag] target: {flag_target}, flag index: {flag_index}");
+					let flag = flag_var(reader);
+					wl!("Clear flag var] {flag} = false");
+				}
+				0x46 => {
+					let flag = flag_var(reader);
+					wl!("Toggle flag var] {flag} = (toggle)");
 				}
 				0x47 | 0x48 => {
-					let flag_target = var_target(reader.u8());
-					let flag_index = reader.u8();
+					let flag = flag_var(reader);
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Branch? (on flag?)] flag target: {flag_target}, flag index: {flag_index}, {branch}");
+					let condition = if cmd == 0x47 { "== true" } else { "== false" };
+					wl!("Branch on flag var] if {flag} {condition} {branch}");
 				}
 				0x49 => {
 					let value = reader.u8();
 					wl!("Set someDataField2] value: {value}");
+				}
+				0x4A => {
+					let value1 = reader.u8();
+					let value2 = reader.u8();
+					let name = reader.pascal_str();
+					wl!("Set some alien] value1: {value1}, value2: {value2}, name: {name}");
 				}
 				0x4B => {
 					wl!("Clear someCmiFIeld]");
@@ -524,6 +630,15 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 					let index = push_block(&mut blocks, offset);
 					wl!("Set on killed function] target: block_{index} ({offset:X})");
 				}
+				0x4D => {
+					let silent = reader.u8() != 0;
+					let msg = reader.pascal_str();
+					wl!("Assert] message: \"{msg}\", (silent: {silent})");
+				}
+				0x4E => {
+					let home = reader.vec3();
+					wl!("Set home] {home:?}");
+				}
 				0x4F => {
 					let pos = reader.vec3();
 					wl!("Set position] pos: {pos:?}");
@@ -531,6 +646,11 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 				0x50 => {
 					let dir = reader.vec3();
 					wl!("Add velocity in facing dir] dir: {dir:?}");
+				}
+				0x51 => {
+					let scale_dt = reader.u8() == 1;
+					let speed = var_or_data(reader);
+					wl!("Move in facing dir?] speed: {speed}, use dt: {scale_dt}");
 				}
 				0x52 => {
 					let var_data = var_or_data(reader);
@@ -548,6 +668,10 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 						let speed = reader.f32();
 						wl!("Scale maybeRadius] target: {target}, speed: {speed}");
 					}
+				}
+				0x54 => {
+					let value = var_or_data(reader);
+					wl!("Set someCmiField11] {value}");
 				}
 				0x56 => {
 					let pos = reader.vec3();
@@ -605,14 +729,25 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 					print_sound(", p2: ", point2, point2_index);
 					wl!("");
 				}
+				0x5A => {
+					let name = reader.pascal_str();
+					let value = reader.f32();
+					wl!("Nothing?] name: {name}, value: {value}");
+				}
 				0x5B => {
 					let var_data = var_or_data(reader);
 					wl!("Set entity someCmiField4] {var_data}");
 				}
+
 				0x5C => {
 					let value = reader.u16();
 					let branch = branch_code(&mut blocks, reader);
 					wl!("Branch on anim field] value: {value}, {branch}");
+				}
+				0x5D => {
+					let speed = reader.f32();
+					let pos = reader.vec3();
+					wl!("Move towards target] speed: {speed}, target: {pos:?}");
 				}
 				0x5E | 0x5F => {
 					let count = reader.u8();
@@ -683,6 +818,10 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 					let value = reader.f32();
 					wl!("Set entitry arena2OrFloatValue] value: {value}");
 				}
+				0x6B => {
+					let name = reader.pascal_str();
+					wl!("Start sound] sound: {name}");
+				}
 				0x6C => {
 					let branch = branch_code(&mut blocks, reader);
 					wl!("Branch on hit bbox] {branch}");
@@ -694,12 +833,30 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 				0x6E => {
 					wl!("Destroy entity quiet]");
 				}
+				0x6F => {
+					let index = reader.i32();
+					wl!("Set arena index] index: {index}");
+				}
+				0x70 => {
+					let name = reader.pascal_str();
+					let pos = reader.vec3();
+					let angle = reader.f32();
+					if name.is_empty() {
+						wl!("Teleport] pos: {pos:?}, angle: {angle}");
+					} else {
+						wl!("Teleport] arena: \"{name}\", pos: {pos:?}, angle: {angle}");
+					}
+				}
 				0x71 => {
 					let pos = reader.vec3();
 					let name = reader.pascal_str();
 					let init_offset = reader.u32();
 					let index = push_block(&mut blocks, init_offset);
 					wl!("Spawn alien] pos: {pos:?}, name: {name}, init offset: block_{index} ({init_offset:})");
+				}
+				0x72 => {
+					let branch = branch_code(&mut blocks, reader);
+					wl!("Branch on someAlien] {branch}");
 				}
 				0x73 => {
 					let angle = reader.f32();
@@ -709,7 +866,11 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 				}
 				0x74 => {
 					let flags = reader.u32();
-					wl!("Add flags] flags: {flags:X}");
+					wl!("Set flags] flags: {flags:X}");
+				}
+				0x75 => {
+					let flags = reader.u32();
+					wl!("Clear flags] flags: {flags:X}");
 				}
 				0x76 => {
 					let value1 = reader.u16();
@@ -721,6 +882,10 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 					let comp = compare(reader);
 					let branch = branch_code(&mut blocks, reader);
 					wl!("Find entity and branch on comparison] name: {name}, {comp}, {branch}");
+				}
+				0x78 => {
+					let angle = reader.f32();
+					wl!("Set pitch angle] angle: {angle}");
 				}
 				0x79 => {
 					let distance = reader.f32();
@@ -736,8 +901,20 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 					let branch = branch_code(&mut blocks, reader);
 					wl!("Branch (arena)?] {branch}");
 				}
+				0x7C => {
+					let value = reader.f32();
+					wl!("Set someAngle] value: {value}");
+				}
 				0x7D => {
 					wl!("Clear function stack]");
+				}
+				0x7E => {
+					wl!("Look at player (pitch angle only)]");
+				}
+				0x7F => {
+					let comp = compare(reader);
+					let branch = branch_code(&mut blocks, reader);
+					wl!("Branch on someCmiField_10] if {comp} {branch}");
 				}
 				0x80 => {
 					let name = reader.pascal_str();
@@ -758,6 +935,35 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 						}
 					}
 					wl!("]");
+				}
+				0x82 => {
+					wl!("Create dent]");
+				}
+				0x83 => {
+					let code = reader.u8();
+					if 0x32 < code {
+						wl!("Run muse5 command] code: {code}");
+					} else {
+						wl!("Run muse5 command] code: {code} (clear currentCmiArena)");
+					}
+				}
+				0x84 => {
+					let value1 = reader.u8();
+					let point_index = reader.u8();
+					let pos = if point_index == 0xFF {
+						reader.vec3()
+					} else {
+						[0.0; 3]
+					};
+					if value1 < 150 {
+						if point_index == 0xFF {
+							wl!("Create bubble] chance: {value1}%, pos: {pos:?}");
+						} else {
+							wl!("Create bubble] chance: {value1}%, pos: somePoints[{point_index:?}]");
+						}
+					} else {
+						wl!("Setup new chunk] change: {}%", value1 - 150);
+					}
 				}
 				0x85 => {
 					let name = reader.pascal_str();
@@ -796,6 +1002,12 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 					let colour = reader.i16();
 					wl!("Set tri colour] tri id: {tri_id}, material: {colour}");
 				}
+				0x8D => {
+					let index = reader.u8();
+					let colour: [u8; 4] = reader.get();
+					let time = reader.f32();
+					wl!("Transparency fade] index: {index}, colour: {colour:?}, time: {time}");
+				}
 				0x8E => {
 					let id = reader.u8();
 					let name = reader.pascal_str();
@@ -803,6 +1015,43 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 					let b = reader.u8();
 					let speed = reader.f32();
 					wl!("Activate fan] id: {id}, name: {name}, a: {a}, b: {b}, speed: {speed}");
+				}
+				0x8F => {
+					let name = reader.pascal_str();
+					wl!("Deactivate fan] name: {name}");
+				}
+				0x90 => {
+					let name = reader.pascal_str();
+					let min = reader.vec3();
+					let max = reader.vec3();
+					let value1 = reader.u8();
+					let value2 = reader.u8();
+					let speed = reader.f32();
+					wl!("Create fan] name: {name}, bbox: {min:?}-{max:?}, value1: {value1}, value2: {value2}, speed: {speed}");
+				}
+				0x91 => {
+					let name = reader.pascal_str();
+					let speed = reader.f32();
+					let delta = reader.f32();
+					wl!("Set fan speed] name: {name}, speed: {speed}, delta: {delta}");
+				}
+				0x92 => {
+					let id = reader.u8();
+					let name = reader.pascal_str();
+					let speed = reader.f32();
+					let size = reader.vec3();
+					let scale = reader.vec2();
+					wl!("Activate conveyor] id: {id}, name: {name}, speed: {speed}, size: {size:?}, scale: {scale:?}");
+				}
+				0x93 => {
+					let name = reader.pascal_str();
+					wl!("Deactivate conveyor] name: {name}");
+				}
+				0x94 => {
+					let name = reader.pascal_str();
+					let speed = reader.f32();
+					let delta = reader.f32();
+					wl!("Set conveyor speed] name: {name}, speed: {speed}, delta: {delta}");
 				}
 				0x95 => {
 					// spawn door
@@ -836,6 +1085,18 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 				0x99 => {
 					let value = reader.f32();
 					wl!("Set entity someDataField (float)] value: {value}");
+				}
+				0x9C => {
+					let index = reader.u8();
+					let name = reader.pascal_str();
+					let cmi_init_offset = reader.u32();
+					let cmi_init_index = push_block(&mut blocks, cmi_init_offset);
+					wl!("Spawn alien] name: {name}, position: somePoints[{index}], init target: block_{cmi_init_index} ({cmi_init_offset:X})");
+				}
+				0xA0 => {
+					let comp = compare(reader);
+					let branch = branch_code(&mut blocks, reader);
+					wl!("Branch on yaw] {comp}, {branch}");
 				}
 				0xA1 => {
 					let position = reader.vec3();
@@ -881,6 +1142,14 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 					let num = reader.u8();
 					wl!("Set triangle vis? 2] id: {triangle_id}, num: {num}");
 				}
+				0xA9 => {
+					let data = var_or_data(reader);
+					wl!("Set someCmiData3] value = {data}");
+				}
+				0xAB => {
+					let branch = branch_code(&mut blocks, reader);
+					wl!("Branch on someAlien2] {branch}");
+				}
 				0xAC => {
 					let kind = reader.u8();
 					if kind == 3 {
@@ -891,6 +1160,17 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 						let pos = reader.vec3();
 						let value = reader.f32();
 						wl!("Explosion] position: {pos:?}, kind: {kind}, value: {value}");
+					}
+				}
+				0xAD => {
+					let name = reader.pascal_str();
+					if !name.is_empty() {
+						wl!("Set currentCmiArena teleport] name: {name}");
+					} else {
+						let name = reader.pascal_str();
+						let delta = reader.vec3();
+						let angle = reader.f32();
+						wl!("Teleport delta] name: {name}, delta: {delta:?}, delta angle: {angle}");
 					}
 				}
 				0xAE => {
@@ -908,6 +1188,35 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 				0xB0 => {
 					let branch = branch_code(&mut blocks, reader);
 					wl!("Branch on flags 0x40000] {branch}");
+				}
+				0xB2 => {
+					let value1 = reader.u8();
+					let pos = if value1 == 3 {
+						let _ = reader.u8();
+						[0.0; 3]
+					} else {
+						reader.vec3()
+					};
+					let radius = reader.f32();
+					let value2 = reader.f32();
+					let value3 = reader.f32();
+					let value4 = reader.u8();
+					wl!("Explosion] pos: {pos:?}, radius: {radius}, value1: {value1}, value2: {value2}, value3: {value3}, value4: {value4}");
+				}
+				0xB3 => {
+					let name = reader.pascal_str();
+					let cmi_init_offset = reader.u32();
+					let cmi_init_index = push_block(&mut blocks, cmi_init_offset);
+					wl!("Spawn alien] name: {name}, init target: block_{cmi_init_index} ({cmi_init_offset:X})");
+				}
+				0xB4 => {
+					let has_delta = reader.u8() != 0;
+					if has_delta {
+						let delta = reader.vec3();
+						wl!("Teleport to someDynamicThing] delta: {delta:?}");
+					} else {
+						wl!("Teleport to someDynamicThing]");
+					}
 				}
 				0xB5 => {
 					let kind = reader.u8();
@@ -939,6 +1248,15 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 					let [value1, radius, size] = reader.vec3();
 					wl!("Destroy alien (and damage area)] value1?: {value1}, radius?: {radius}, size? : {size}");
 				}
+				0xB9 => {
+					let comp = compare(reader);
+					let branch = branch_code(&mut blocks, reader);
+					wl!("Branch on someCmiDataValues0] {comp}, {branch}");
+				}
+				0xBA => {
+					let scale = 30.0 / reader.f32();
+					wl!("Set someCmiField3] 30 * someCmiDataValues[0] * {scale}");
+				}
 				0xBB => {
 					let horizontal_speed = reader.f32();
 					let vertical_speed = reader.f32();
@@ -948,6 +1266,46 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 					let comp = compare(reader);
 					let branch = branch_code(&mut blocks, reader);
 					wl!("Branch on distance to player] {comp} {branch}");
+				}
+				0xBD => {
+					let value1 = reader.u8();
+					if value1 != 0 && value1 != 1 {
+						wl!("Move towards player] (noop)");
+					} else {
+						let max_speed = reader.f32();
+						if value1 == 0 {
+							let target_z = reader.f32();
+							wl!(
+								"Move towards player] max speed: {max_speed}, target z: {target_z}"
+							);
+						} else {
+							wl!("Move towards player] max speed: {max_speed}");
+						}
+					}
+				}
+				0xBE => {
+					let value = reader.u8() != 0;
+					let name = reader.pascal_str();
+					wl!("Set fan affects damp] name: {name}, on: {value}");
+				}
+				0xBF => {
+					let index = reader.u8();
+					let comp = compare(reader);
+					let branch = branch_code(&mut blocks, reader);
+					let abs = (index & 0x80) == 0;
+					let index = index & !0x80;
+					if index < 3 {
+						let index = (b'x' + index) as char;
+						wl!("Branch on axis distance to player] index: {index} (abs: {abs}), {comp}, {branch}");
+					} else {
+						wl!("Branch on axis distance to player] index: {index} (abs: {abs}), {comp}, {branch}");
+					}
+				}
+				0xC0 => {
+					let delta = reader.vec3();
+					let height = reader.f32();
+					let branch = branch_code(&mut blocks, reader);
+					wl!("Branch on can move to] delta: {delta:?}, height: {height}, {branch}");
 				}
 				0xC1 => {
 					let code = reader.u8();
@@ -965,6 +1323,14 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 					let branch = branch_code(&mut blocks, reader);
 					wl!("Branch on some alien value] value: {value}, {branch}");
 				}
+				0xC5 => {
+					let branch = branch_code(&mut blocks, reader);
+					wl!("Branch on hide] {branch}");
+				}
+				0xC7 => {
+					let data = var_or_data(reader);
+					wl!("Set someCmiData] {data}");
+				}
 				0xC9 => {
 					let scale = reader.f32();
 					let angle = reader.f32();
@@ -974,11 +1340,33 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 					let background_hidden = reader.u8();
 					wl!("Set background visibility] hidden: {background_hidden}");
 				}
+				0xCB => {
+					let use_radius = reader.u8() == 1;
+					if use_radius {
+						let offset = reader.f32();
+						wl!("Angle camera to alien] offset: {offset}");
+					} else {
+						wl!("Angle camera to alien]");
+					}
+				}
+				0xCD => {
+					let value = reader.u8();
+					wl!("Set someCmiField12] value: {value}");
+				}
 				0xCF => {
 					let speed = reader.f32();
 					let angle = reader.f32();
 					let branch = branch_code(&mut blocks, reader);
 					wl!("Turn to angle] angle: {angle}, speed: {speed}, {branch}");
+				}
+				0xD0 => {
+					let name = reader.pascal_str();
+					let branch = branch_code(&mut blocks, reader);
+					wl!("Branch on has part] name: {name}, {branch}");
+				}
+				0xD2 => {
+					let value = var_or_data(reader);
+					wl!("Set someScale] scale: {value}");
 				}
 				0xD3 => {
 					wl!("Zero velocity]");
@@ -986,23 +1374,36 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 				0xD5 => {
 					let comp = compare(reader);
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Call on distance to thing] {comp}, {branch}");
+					wl!("Branch on distance to thing] {comp}, {branch}");
 				}
 				0xD8 => {
-					let target = var_target(reader.u8());
-					let index = reader.u8();
+					let var = simple_var(reader);
 					let value = reader.f32();
-					wl!("Add to var ptr] target: {target}, index: {index}, delta: {value}");
+					wl!("Add var with delta] {var} += {value} * dt");
 				}
 				0xD9 => {
 					let code = reader.u8();
 					let value = reader.u32();
 					wl!("Set some travglobal offset] code: {code}, value: {value}");
 				}
+				0xDC => {
+					let pos = reader.vec3();
+					wl!("Set target] pos: {pos:?}");
+				}
+				0xDD => {
+					let some_flag = reader.u8() == 1;
+					let branch = branch_code(&mut blocks, reader);
+					wl!("Try jumping] flag: {some_flag}, {branch}");
+				}
 				0xDE => {
 					let comp = compare(reader);
 					let branch = branch_code(&mut blocks, reader);
 					wl!("Branch on instruction count] {comp}, {branch}");
+				}
+				0xE5 => {
+					let turn_speed = reader.f32();
+					let branch = branch_code(&mut blocks, reader);
+					wl!("Turn towards home] turn speed: {turn_speed}, complete: {branch}");
 				}
 				0xE6 => {
 					let position = reader.vec3();
@@ -1027,6 +1428,11 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 					let branch = branch_code(&mut blocks, reader);
 					wl!("Branch on sound playing] name: {name}, {branch}");
 				}
+				0xEA => {
+					let comp = compare(reader);
+					let branch = branch_code(&mut blocks, reader);
+					wl!("Branch on angle to player] {comp}, {branch}");
+				}
 				0xEB => {
 					let nums = reader.vec4();
 					wl!("Turn params] nums: {nums:?}");
@@ -1035,6 +1441,53 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 					let pos = reader.vec3();
 					let branch = branch_code(&mut blocks, reader);
 					wl!("Branch on floor] pos: {pos:?}, {branch}");
+				}
+				0xED => {
+					let min = reader.vec3();
+					let max = reader.vec3();
+					let branch = branch_code(&mut blocks, reader);
+					wl!("Branch on inside box] min: {min:?}, max: {max:?}, {branch}");
+				}
+				0xEE => {
+					let component = match reader.u8() {
+						n if n < 3 => (b'x' + n) as char,
+						n => '?',
+					};
+					let comp = compare(reader);
+					let branch = branch_code(&mut blocks, reader);
+					wl!("Branch on position component] component: {component}, {comp}, {branch}");
+				}
+				0xEF => {
+					let min = reader.vec3();
+					let max = reader.vec3();
+					wl!("Set someBbox] min: {min:?}, max: {max:?}");
+				}
+				0xF0 => {
+					let value = reader.u8();
+					wl!("Set global someCmiField] value: {value}");
+				}
+				0xF1 => {
+					let comp = compare(reader);
+					let branch = branch_code(&mut blocks, reader);
+					wl!("Branch on some global pickup data] {comp}, {branch}");
+				}
+				0xF2 => {
+					let has_matrix = reader.u8() != 0;
+					if has_matrix {
+						let matrix: [[f32; 4]; 3] = reader.get();
+						wl!("Set some transform matrix] transform: {matrix:?}");
+					} else {
+						wl!("Clear some transform matrix]");
+					}
+				}
+				0xF4 => {
+					let add = reader.u8() != 0;
+					let value = reader.f32();
+					if add {
+						wl!("Add global cmiField1] value += {value}");
+					} else {
+						wl!("Set global cmiField1] value = {value}");
+					}
 				}
 				0xF7 => {
 					let msg_type = reader.u8();

@@ -74,6 +74,13 @@ impl<'buf> Reader<'buf> {
 		result
 	}
 
+	#[must_use]
+	pub fn clone_at(&self, new_pos: usize) -> Self {
+		let mut result = self.clone();
+		result.set_position(new_pos);
+		result
+	}
+
 	pub fn buf(&self) -> &'buf [u8] {
 		self.reader.get_ref()
 	}
@@ -162,10 +169,12 @@ impl<'buf> Reader<'buf> {
 
 	pub fn try_align(&mut self, alignment: usize) -> Option<()> {
 		debug_assert!(alignment.is_power_of_two() && alignment > 0);
-		let mask = alignment - 1;
 		let pos = self.position();
-		let next_position = (self.position() + mask) & !mask;
+		let next_position = pos.next_multiple_of(alignment);
 		let remainder = next_position - pos;
+		if remainder > self.remaining_len() {
+			return None;
+		}
 		if remainder != 0 {
 			self.mark_read(pos..pos + next_position);
 			self.try_skip(remainder as isize)

@@ -12,88 +12,72 @@ fn var_target(index: u8) -> &'static str {
 	}
 }
 
-fn push_block(blocks: &mut Vec<u32>, offset: u32) -> usize {
+fn push_block(blocks: &mut Vec<u32>, offset: u32) -> BlockInfo {
 	if offset == 0 {
-		return 0;
+		return BlockInfo { index: 0, offset };
 	}
-	if let Some(index) = blocks.iter().position(|&o| o == offset) {
+	let index = if let Some(index) = blocks.iter().position(|&o| o == offset) {
 		index
 	} else {
 		let result = blocks.len();
 		blocks.push(offset);
 		result
+	};
+	BlockInfo { index, offset }
+}
+fn read_block(blocks: &mut Vec<u32>, reader: &mut Reader) -> BlockInfo {
+	push_block(blocks, reader.u32())
+}
+
+#[derive(Default)]
+struct BlockInfo {
+	index: usize,
+	offset: u32,
+}
+impl std::fmt::Display for BlockInfo {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		if self.offset == 0 {
+			f.write_str("(None)")
+		} else {
+			write!(f, "block_{} ({:X})", self.index, self.offset)
+		}
 	}
 }
 
 struct BranchInfo {
 	code: u8,
-	offset1: u32,
-	offset2: u32,
-	index1: usize,
-	index2: usize,
+	target1: BlockInfo,
+	target2: BlockInfo,
 }
 impl std::fmt::Display for BranchInfo {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		/*
-
-		if (!condition){
-			if code == 0xFE {
-				call(offset2);
-			} else {
-				continue;
-			}
-		} else {
-			if (code == 0xFC | 0xFE){
-				call(offset1);
-			else if (code == 0xFD) {
-				return;
-			} else {
-				jump(offset1);
-			}
-		}
-
-		 */
 		match self.code {
 			0xFE => write!(
 				f,
-				"{{ call block_{} ({:X}) }} else {{ call block_{} ({:X}) }}",
-				self.index1, self.offset1, self.index2, self.offset2
+				"{{ call {} }} else {{ call {} }}",
+				self.target1, self.target2
 			),
-			0xFC => write!(f, "{{ call block_{} ({:X}) }}", self.index1, self.offset1),
+			0xFC => write!(f, "{{ call {} }}", self.target1),
 			0xFD => write!(f, "{{ return }}"),
-			0xC => write!(f, "{{ goto block_{} ({:X}) }}", self.index1, self.offset1),
+			0xC => write!(f, "{{ goto {} }}", self.target1),
 			code => write!(f, "{{ unknown (code: {code:2X}) }}"),
 		}
-		/*
-		match self.code {
-			0xFE => write!(
-				f,
-				"target 1: block_{} ({:X}), target 2: block_{} ({:X})",
-				self.index1, self.offset1, self.index2, self.offset2
-			),
-			0xFC | 0xC => write!(f, "target: block_{} ({:X})", self.index1, self.offset1),
-			0xFD => write!(f, "target: (return)"),
-			code => write!(f, "code: {code:2X}"),
-		}
-		*/
 	}
 }
 fn branch_code(blocks: &mut Vec<u32>, reader: &mut Reader) -> BranchInfo {
 	let code = reader.u8();
-	let mut offset1 = 0;
-	let mut offset2 = 0;
+	let mut target1 = Default::default();
+	let mut target2 = Default::default();
 	if code == 0xFE {
-		offset1 = reader.u32();
-		offset2 = reader.u32();
+		target1 = read_block(blocks, reader);
+		target2 = read_block(blocks, reader);
 	} else if code == 0xFC || code == 0xC {
-		offset1 = reader.u32();
+		target1 = read_block(blocks, reader);
 	}
 	BranchInfo {
 		code,
-		offset1,
-		offset2,
-		index1: push_block(blocks, offset1),
-		index2: push_block(blocks, offset2),
+		target1,
+		target2,
 	}
 }
 
@@ -197,6 +181,17 @@ fn flag_var(reader: &mut Reader) -> FlagVar {
 	FlagVar { target, index }
 }
 
+fn read_path(reader: &Reader, offset: u32) -> Vec<crate::PathDataEntry> {
+	let mut reader = reader.clone_at(offset as usize);
+	let count = reader.u32();
+	(0..count)
+		.map(|_| {
+			let chunk: [u32; 10] = reader.get();
+			unsafe { std::mem::transmute(chunk) }
+		})
+		.collect()
+}
+
 pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 	let mut summary = String::new();
 	if reader.position() == 0 {
@@ -245,15 +240,13 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 				}
 				0x02 => {
 					let path_offset = reader.u32();
+					let path = read_path(reader, path_offset);
 					let value1 = reader.u8();
 					let value2 = reader.u8();
 					let value3 = reader.u16();
 					let rest = reader.u8();
-					let mut vec = [0.0; 3];
-					if rest == 0 {
-						vec = reader.vec3();
-					}
-					wl!("Set path] path offset: {path_offset:X}, v1: {value1}, v2: {value2}, v3: {value3}, rest: {rest}, vec: {vec:?}");
+					let vec = if rest == 0 { reader.vec3() } else { [0.0; 3] };
+					wl!("Set path] v1: {value1}, v2: {value2}, v3: {value3}, rest: {rest}, vec: {vec:?}, path (offset {path_offset:X}): {path:?}");
 				}
 				0x03 => {
 					let cmi_data_3_offset = reader.u32();
@@ -322,11 +315,10 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 				}
 				0x0C => {
 					let count = reader.u8();
-					let offsets = reader.get_vec::<u32>(count as usize);
 					w!("Random jump] targets:");
-					for offset in offsets {
-						let index = push_block(&mut blocks, offset);
-						w!(" block_{index} ({offset})");
+					for _ in 0..count {
+						let block = read_block(&mut blocks, reader);
+						w!(" {}", block);
 					}
 					wl!();
 				}
@@ -405,9 +397,8 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 				0x1D => {
 					let value1 = reader.u8();
 					let name = reader.pascal_str();
-					let offset = reader.u32();
-					let index = push_block(&mut blocks, offset);
-					wl!("CreateChain] value1: {value1}, name: {name}, target: block_{index} ({offset:X})");
+					let target = read_block(&mut blocks, reader);
+					wl!("CreateChain] value1: {value1}, name: {name}, target: {target}");
 				}
 				0x1F => {
 					let count = reader.u8();
@@ -557,12 +548,11 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 						name1 = reader.pascal_str();
 					}
 					let name2 = reader.pascal_str();
-					let offset = reader.u32();
-					let index = push_block(&mut blocks, offset);
+					let target = read_block(&mut blocks, reader);
 					if has_name == 0 {
-						wl!("Spawn badguy] point index: {point_index}, name: {name2}, target: block_{index} ({offset:X})");
+						wl!("Spawn badguy] point index: {point_index}, name: {name2}, target: {target}");
 					} else {
-						wl!("Spawn badguy] target name: {name1}, name: {name2}, target: block_{index} ({offset:X})");
+						wl!("Spawn badguy] target name: {name1}, name: {name2}, target: {target}");
 					}
 				}
 				0x3E => {
@@ -626,9 +616,8 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 					wl!("Clear someCmiFIeld]");
 				}
 				0x4C => {
-					let offset = reader.u32();
-					let index = push_block(&mut blocks, offset);
-					wl!("Set on killed function] target: block_{index} ({offset:X})");
+					let target = read_block(&mut blocks, reader);
+					wl!("Set on killed function] target: {target}");
 				}
 				0x4D => {
 					let silent = reader.u8() != 0;
@@ -673,12 +662,15 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 					let value = var_or_data(reader);
 					wl!("Set someCmiField11] {value}");
 				}
+				0x55 => {
+					let set = reader.u8() != 0;
+					wl!("Set some data flag7] set: {set}");
+				}
 				0x56 => {
 					let pos = reader.vec3();
 					let name = reader.pascal_str();
-					let cmi_offset = reader.u32();
-					let cmi_index = push_block(&mut blocks, cmi_offset);
-					wl!("Spawn entity 3] name: {name}, pos: {pos:?}, cmi init target: block_{cmi_index} ({cmi_offset:X})");
+					let init_target = read_block(&mut blocks, reader);
+					wl!("Spawn entity 3] name: {name}, pos: {pos:?}, init target: {init_target}");
 				}
 				0x57 => {
 					let min_dist = reader.u16();
@@ -758,12 +750,11 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 					}
 					for i in 0..count {
 						let weight = reader.u8();
-						let offset = reader.u32();
-						let index = push_block(&mut blocks, offset);
+						let target = read_block(&mut blocks, reader);
 						if i != 0 {
 							w!(", ");
 						}
-						w!("(weight: {weight}, target: block_{index} ({offset:X}))");
+						w!("(weight: {weight}, target: {target})");
 					}
 					wl!("]");
 				}
@@ -785,9 +776,8 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 				0x63 => {
 					let trigger_index = (reader.i8() - 1) % 16;
 					let id = reader.u8();
-					let offset = reader.u32();
-					let index = push_block(&mut blocks, offset);
-					wl!("Set triangle damage trigger] trigger index: {trigger_index}, id: {id}, target: block_{index} ({offset:X})");
+					let target = read_block(&mut blocks, reader);
+					wl!("Set triangle damage trigger] trigger index: {trigger_index}, id: {id}, target: {target}");
 				}
 				0x64 => {
 					let name = reader.pascal_str();
@@ -850,9 +840,8 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 				0x71 => {
 					let pos = reader.vec3();
 					let name = reader.pascal_str();
-					let init_offset = reader.u32();
-					let index = push_block(&mut blocks, init_offset);
-					wl!("Spawn alien] pos: {pos:?}, name: {name}, init offset: block_{index} ({init_offset:})");
+					let init_target = read_block(&mut blocks, reader);
+					wl!("Spawn alien] pos: {pos:?}, name: {name}, init target: {init_target}");
 				}
 				0x72 => {
 					let branch = branch_code(&mut blocks, reader);
@@ -1060,9 +1049,8 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 					let arena_index = reader.i32();
 					let object_name = reader.pascal_str();
 					let arena_name = reader.pascal_str();
-					let cmi_init_offset = reader.u32();
-					let cmi_init_index = push_block(&mut blocks, cmi_init_offset);
-					wl!("Spawn Door] name: {object_name}, arena: {arena_name}, pos: {position:?}, angle: {angle}, arena_index: {arena_index}, cmi init target: block_{cmi_init_index} ({cmi_init_offset:X})");
+					let init_target = read_block(&mut blocks, reader);
+					wl!("Spawn Door] name: {object_name}, arena: {arena_name}, pos: {position:?}, angle: {angle}, arena_index: {arena_index}, init target: {init_target}");
 				}
 				0x96 => {
 					let anim1_offset = reader.u32();
@@ -1089,9 +1077,23 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 				0x9C => {
 					let index = reader.u8();
 					let name = reader.pascal_str();
-					let cmi_init_offset = reader.u32();
-					let cmi_init_index = push_block(&mut blocks, cmi_init_offset);
-					wl!("Spawn alien] name: {name}, position: somePoints[{index}], init target: block_{cmi_init_index} ({cmi_init_offset:X})");
+					let init_target = read_block(&mut blocks, reader);
+					wl!("Spawn alien] name: {name}, position: somePoints[{index}], init target: {init_target}");
+				}
+				0x9F => {
+					let value1 = reader.u8();
+					let pos1 = match value1 {
+						0 => [0.0; 3],
+						1 | 2 => reader.vec3(),
+						n => {
+							println!("invalid 0x9f opcode {n}");
+							[0.0; 3]
+						}
+					};
+					let pos2 = reader.vec3();
+					let name = reader.pascal_str();
+					let init_target = read_block(&mut blocks, reader);
+					wl!("Spawn blit alien] name: {name}, position type: {value1}, pos1: {pos1:?}, pos2: {pos2:?}, init target: {init_target}");
 				}
 				0xA0 => {
 					let comp = compare(reader);
@@ -1101,9 +1103,8 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 				0xA1 => {
 					let position = reader.vec3();
 					let object_name = reader.pascal_str();
-					let cmi_init_offset = reader.u32();
-					let cmi_init_index = push_block(&mut blocks, cmi_init_offset);
-					wl!("Spawn Entity 1] name: {object_name}, pos: {position:?}, init target: block_{cmi_init_index} ({cmi_init_offset:X})");
+					let init_target = read_block(&mut blocks, reader);
+					wl!("Spawn Entity 1] name: {object_name}, pos: {position:?}, init target: {init_target}");
 				}
 				0xA2 => {
 					let thing_index = (reader.u8() - 1) % 16;
@@ -1189,6 +1190,10 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 					let branch = branch_code(&mut blocks, reader);
 					wl!("Branch on flags 0x40000] {branch}");
 				}
+				0xB1 => {
+					let value = var_or_data(reader);
+					wl!("Set someCmiField1] value = {value}");
+				}
 				0xB2 => {
 					let value1 = reader.u8();
 					let pos = if value1 == 3 {
@@ -1205,9 +1210,8 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 				}
 				0xB3 => {
 					let name = reader.pascal_str();
-					let cmi_init_offset = reader.u32();
-					let cmi_init_index = push_block(&mut blocks, cmi_init_offset);
-					wl!("Spawn alien] name: {name}, init target: block_{cmi_init_index} ({cmi_init_offset:X})");
+					let init_target = read_block(&mut blocks, reader);
+					wl!("Spawn alien] name: {name}, init target: {init_target}");
 				}
 				0xB4 => {
 					let has_delta = reader.u8() != 0;
@@ -1327,9 +1331,22 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 					let branch = branch_code(&mut blocks, reader);
 					wl!("Branch on hide] {branch}");
 				}
+				0xC6 => {
+					let name = reader.pascal_str();
+					let value1 = reader.u8();
+					let value2 = reader.u32();
+					let value3 = reader.u32();
+					wl!("Set someData] name: {name}, value1: {value1}, value2: {value2}, value3: {value3}");
+				}
 				0xC7 => {
 					let data = var_or_data(reader);
 					wl!("Set someCmiData] {data}");
+				}
+				0xC8 => {
+					let speed = reader.f32();
+					let target = reader.vec3();
+					let branch = branch_code(&mut blocks, reader);
+					wl!("Set someAnimVector, branch if done] speed: {speed}, target: {target:?}, {branch}");
 				}
 				0xC9 => {
 					let scale = reader.f32();
@@ -1352,6 +1369,14 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 				0xCD => {
 					let value = reader.u8();
 					wl!("Set someCmiField12] value: {value}");
+				}
+				0xCE => {
+					let path_offset = reader.u32();
+					let path = read_path(reader, path_offset);
+					let length = reader.f32();
+					let name = reader.pascal_str();
+					let target = read_block(&mut blocks, reader);
+					wl!("Spawn aliens on path] name: {name}, spacing: {length}, init target: {target}, path (offset {path_offset:X}): {path:?}");
 				}
 				0xCF => {
 					let speed = reader.f32();
@@ -1410,9 +1435,8 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 					let angle = reader.f32();
 					let arena_index = reader.i32();
 					let object_name = reader.pascal_str();
-					let cmi_init_offset = reader.u32();
-					let cmi_init_index = push_block(&mut blocks, cmi_init_offset);
-					wl!("Spawn Entity 2] name: {object_name}, pos: {position:?}, angle: {angle}, arena_index: {arena_index}, init target: block_{cmi_init_index} ({cmi_init_offset:X})");
+					let init_target = read_block(&mut blocks, reader);
+					wl!("Spawn Entity 2] name: {object_name}, pos: {position:?}, angle: {angle}, arena_index: {arena_index}, init target: {init_target}");
 				}
 				0xE7 => {
 					let branch = branch_code(&mut blocks, reader);
@@ -1507,11 +1531,10 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 				}
 				0xFC => {
 					let count = reader.u8();
-					let offsets = reader.get_vec::<u32>(count as usize);
 					w!("Random call] targets:");
-					for offset in offsets {
-						let index = push_block(&mut blocks, offset);
-						w!(" block_{index} ({offset:X})");
+					for _ in 0..count {
+						let target = read_block(&mut blocks, reader);
+						w!(" {target}");
 					}
 					wl!();
 				}

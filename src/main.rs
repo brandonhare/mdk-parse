@@ -231,8 +231,7 @@ fn try_parse_anim(data: &mut Reader) -> Option<Vec<Anim>> {
 		}
 		let [a, b]: [_; 2] = data.try_get()?;
 
-		let mut pixels = Vec::new();
-		pixels.resize(width as usize * height as usize, 0);
+		let mut pixels = vec![0; width as usize * height as usize];
 		'outer: for row in pixels.chunks_exact_mut(width as usize) {
 			let mut col_index = 0;
 			loop {
@@ -273,6 +272,15 @@ fn try_parse_anim(data: &mut Reader) -> Option<Vec<Anim>> {
 	}
 
 	Some(results)
+}
+
+#[repr(C)]
+#[derive(Debug)]
+struct PathDataEntry {
+	t: i32,
+	pos1: Vec3,
+	pos2: Vec3,
+	pos3: Vec3,
 }
 
 fn parse_mti(path: &Path) {
@@ -1484,8 +1492,7 @@ fn save_anim(name: &str, anims: &[Anim], output: &mut OutputWriter, pal: PalRef)
 	encoder.set_sep_def_img(false).unwrap();
 	encoder.set_frame_delay(1, 12).unwrap();
 	let mut encoder = encoder.write_header().expect("failed to write png header");
-	let mut buffer = Vec::new();
-	buffer.resize(width * height, 0);
+	let mut buffer = vec![0; width * height];
 	for anim in anims {
 		buffer.fill(0);
 		let offset_x = (offset_x - (anim.x as isize)) as usize;

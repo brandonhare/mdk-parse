@@ -1452,7 +1452,8 @@ fn parse_cmi(path: &Path) {
 			arena_output.write(
 				name,
 				"txt",
-				format!("name: {name}, thing: \"{str1}\", music: \"{music}\"\n\n{cmi}").as_bytes(),
+				format!("name: {name}, music 1: \"{str1}\", music 2: \"{music}\"\n\n{cmi}")
+					.as_bytes(),
 			);
 		}
 	}

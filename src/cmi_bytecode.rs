@@ -44,6 +44,7 @@ impl std::fmt::Display for BlockInfo {
 	}
 }
 
+#[derive(Default)]
 struct BranchInfo {
 	code: u8,
 	target1: BlockInfo,
@@ -52,6 +53,7 @@ struct BranchInfo {
 impl std::fmt::Display for BranchInfo {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self.code {
+			0 => write!(f, "(none)"),
 			0xFE => write!(
 				f,
 				"{{ call {} }} else {{ call {} }}",
@@ -251,25 +253,16 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 				0x03 => {
 					let cmi_data_3_offset = reader.u32();
 					wl!("Set animation?] offset: {cmi_data_3_offset:X}");
+					// todo offset data
 				}
 				0x04 => {
 					let mut code1 = reader.u8();
-					let mut code2 = 0;
-					let mut index1 = 0;
-					let mut index2 = 0;
+					//let mut code2 = 0;
+					let mut branch = Default::default();
 					let mut f1 = 0.0;
 					let mut f2 = 0.0;
 					if code1 == 7 {
-						code2 = reader.u8();
-						if code2 == 0xfe {
-							index1 = reader.u32();
-							index2 = reader.u32();
-						} else if code2 == 0xfc || code2 == 0x0c {
-							index1 = reader.u32();
-						}
-						if code2 == 0xfc {
-							code1 = 0xfc;
-						}
+						branch = branch_code(&mut blocks, reader);
 					} else if code1 == 0x2b {
 						f1 = reader.f32();
 						f2 = reader.f32();
@@ -287,7 +280,7 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 					if code3 == 5 {
 						num1 = reader.u32();
 					}
-					wl!("Give order] {code1} {code2} {index1} {index2} {f1} {f2} {code3} {f3} {name} {num1}");
+					wl!("Give order] code1: {code1}, {branch}, f1: {f1}, f2: {f2}, code3: {code3}, f3: {f3}, name: {name}, num1: {num1}");
 				}
 				0x05 => {
 					let value = reader.f32();
@@ -341,7 +334,7 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 						wl!("Destroy entity]");
 					} else {
 						wl!(
-							"Set entity value] value: {value}, (some flag set: {})",
+							"Set entity health?] value: {value}, (some flag set: {})",
 							64999 < value
 						);
 					}
@@ -392,7 +385,8 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 				}
 				0x1C => {
 					let offset = reader.u32();
-					wl!("Mortar path] path data offset: {offset:2X}");
+					let path = read_path(reader, offset);
+					wl!("Mortar path] path (offset {offset:X}): {path:?}");
 				}
 				0x1D => {
 					let value1 = reader.u8();
@@ -534,6 +528,7 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 				0x3B => {
 					let anim_offset = reader.u32();
 					wl!("Set anim] offset: {anim_offset:X}");
+					// todo anim offset data
 				}
 				0x3C => {
 					wl!("Face player 2]");
@@ -669,9 +664,10 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 				0x56 => {
 					let pos = reader.vec3();
 					let name = reader.pascal_str();
-					//let init_target = read_block(&mut blocks, reader); // todo
 					let offset = reader.u32();
 					wl!("Spawn entity 3] name: {name}, pos: {pos:?}, init offset: {offset:X}");
+
+					// todo init offset data
 				}
 				0x57 => {
 					let min_dist = reader.u16();
@@ -1068,6 +1064,7 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 					wl!(
 						"Set anims] anim1 offset: {anim1_offset:X}, anim2 offset: {anim2_offset:X}"
 					);
+					// todo anim offset data
 				}
 				0x97 => {
 					let str1 = reader.pascal_str();
@@ -1116,7 +1113,10 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader) -> String {
 						| (v6 as usize) << 0x18;
 					if has_target {
 						let target = reader.u32();
+						let target = push_block(&mut blocks, target);
 						wl!("Check touch damage] value1: {value1}, damage: {damage}, value3: {value3}, target: {target}");
+						println!("cmi touch damage target used!");
+					// todo target offset data?
 					} else {
 						wl!("Check touch damage] value1: {value1}, damage: {damage}, value3: {value3}");
 					}

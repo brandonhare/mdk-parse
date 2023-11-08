@@ -113,10 +113,21 @@ impl<'a> Drop for DataFile<'a> {
 			}
 			println!("  {start:06X}-{end:06X} ({len:7})");
 		}
+		if !first {
+			println!();
+		}
 	}
 }
 fn read_file(path: &Path) -> DataFile {
-	DataFile(path, std::fs::read(path).unwrap())
+	let data = std::fs::read(path).unwrap();
+
+	#[cfg(feature = "readranges")]
+	{
+		let origin = data.as_ptr() as usize;
+		reader::READ_RANGE.with(|range| range.borrow_mut().remove(origin..origin + data.len()));
+	}
+
+	DataFile(path, data)
 }
 
 fn parse_sni(path: &Path) {
@@ -300,7 +311,7 @@ fn parse_mti_data(output: &mut OutputWriter, buf: &[u8], pal: PalRef) {
 	assert_eq!(reader.len(), filesize as usize, "filesize does not match");
 	reader.resize(4..);
 
-	let name = reader.str(12);
+	let filename = reader.str(12);
 	let filesize2 = reader.u32();
 	assert_eq!(filesize, filesize2 + 12, "filesizes do not match");
 	let num_entries = reader.u32();
@@ -309,9 +320,9 @@ fn parse_mti_data(output: &mut OutputWriter, buf: &[u8], pal: PalRef) {
 
 	for i in 0..num_entries {
 		let name = reader.str(8);
-		let a = reader.u32();
+		let flags = reader.u32();
 
-		if a == 0xFFFFFFFF {
+		if flags == 0xFFFFFFFF {
 			let b = reader.i32();
 			let c = reader.u32();
 			let d = reader.u32();
@@ -326,40 +337,43 @@ fn parse_mti_data(output: &mut OutputWriter, buf: &[u8], pal: PalRef) {
 
 			let width: u32;
 			let height: u32;
-			let new_a;
+			let mut num_frames = 1;
+			let mut flags2 = 0;
 
-			if a & 0x30000 == 0 {
+			if flags & 0x30000 == 0 {
 				width = data.u16() as u32;
 				height = data.u16() as u32;
-				new_a = a;
 			} else {
-				new_a = (a & 0xFFFF) | ((data.u16() as u32) << 0x10);
-				let ignored = data.u16();
+				flags2 = data.u32();
+				if flags & 0x10000 != 0 {
+					// animated
+					num_frames = flags2;
+				}
 				width = data.u16() as u32;
 				height = data.u16() as u32;
 			}
+			// todo: other flags
 
-			let bit_depth = get_bits(width);
-
-			let bit_depth_2 = (1 << (bit_depth & 0x3F)) - 1;
-
-			let data_start_pos = start_offset + data.position();
-			let data_end_pos = data_start_pos + width as usize * height as usize;
-
-			//println!("{i}: {filename} a:{a:x} a2:{new_a:x} b:{b} c:{c} len:{maybe_length} value:{some_value}, bits:{bit_depth}, bits2:{bit_depth_2}, startPos:{start_offset:x}, dataStartPos:{data_start_pos:x}, dataEndPos:{data_end_pos:x}");
-
-			output.set_output_path(name, "png");
-
-			//println!("{i}: {dirname:?}");
-
-			let data = data.remaining_slice();
-			save_png(
-				&output.path,
-				&data[..width as usize * height as usize],
-				width,
-				height,
-				pal.clone(),
-			);
+			let frame_size = (width * height) as usize;
+			if num_frames == 1 {
+				let pixels = data.slice(frame_size);
+				output.set_output_path(name, "png");
+				save_png(&output.path, pixels, width, height, pal.clone());
+			} else {
+				let anims: Vec<Anim> = (0..num_frames)
+					.map(|_| {
+						let pixels = data.slice(frame_size);
+						Anim {
+							x: 0,
+							y: 0,
+							width: width as u16,
+							height: height as u16,
+							pixels: pixels.to_owned(),
+						}
+					})
+					.collect();
+				save_anim(name, &anims, output, pal.clone());
+			}
 		}
 	}
 
@@ -375,6 +389,13 @@ fn parse_mti_data(output: &mut OutputWriter, buf: &[u8], pal: PalRef) {
 			.as_bytes(),
 		);
 	}
+
+	reader.set_position(reader.len() - 12);
+	let footer_name = reader.str(12);
+	assert_eq!(
+		filename, footer_name,
+		"mti had mismatched header and footer names"
+	);
 }
 
 fn get_bits(n: u32) -> u32 {
@@ -444,7 +465,7 @@ fn set_pal(filename: &str, asset_name: &str, pal: &[u8]) -> PalRef {
 					.copy_from_slice(pal);
 				result
 			} else {
-				println!("level pal not found for arena pal {level_name}/{asset_name}");
+				//println!("level pal not found for arena pal {level_name}/{asset_name}");
 				return None;
 			}
 		} else {
@@ -583,7 +604,7 @@ fn parse_bni(path: &Path) {
 		}
 
 		// image with palette
-		if try_parse_image(data, name, &mut output) {
+		if try_parse_image(name, data, &mut output) {
 			continue;
 		}
 
@@ -623,8 +644,8 @@ fn parse_bni(path: &Path) {
 			continue;
 		}
 
-		if let Some(anim) = try_parse_alienanim(&mut reader.clone()) {
-			output.write(name, "anim.txt", format!("{anim:?}").as_bytes());
+		if let Some(anim) = try_parse_alienanim(name, &mut reader.clone()) {
+			save_alienanim(name, &anim, &mut output);
 			continue;
 		}
 
@@ -728,21 +749,25 @@ fn parse_overlay(name: &str, data: &[u8], output: &mut OutputWriter, pal: PalRef
 	save_png(&output.path, &dest, width as u32, height as u32, pal);
 }
 
-fn try_parse_image(data: &[u8], asset_name: &str, output: &mut OutputWriter) -> bool {
+fn try_parse_image(name: &str, data: &[u8], output: &mut OutputWriter) -> bool {
 	if data.len() <= 0x304 {
 		return false;
 	}
 	let lut = &data[..0x300];
 	let width = u16::from_le_bytes(data[0x300..0x302].try_into().unwrap()) as usize;
 	let height = u16::from_le_bytes(data[0x302..0x304].try_into().unwrap()) as usize;
-	let data = &data[0x304..];
-	if data.len() != width * height {
+	let pixel_data = &data[0x304..];
+	if pixel_data.len() != width * height {
 		return false;
 	}
-	output.set_output_path(asset_name, "png");
+
+	// mark as read
+	#[cfg(feature = "readranges")]
+	let _ = Reader::new(data).slice(0x300 + 4 + width * height);
+
 	save_png(
 		&output.path,
-		data,
+		pixel_data,
 		width as _,
 		height as _,
 		Some(lut.into()),
@@ -848,13 +873,14 @@ fn parse_mto_subthing(arena_name: &str, buf: &[u8], output: &mut OutputWriter) {
 	// animations?
 	for (i, &(name, offset)) in animations.iter().enumerate() {
 		let end = all_offsets[all_offsets.iter().position(|o| *o == offset).unwrap() + 1];
-		let Some(anim) = try_parse_alienanim(&mut data.resized(offset as usize..end as usize))
+		let Some(anim) =
+			try_parse_alienanim(name, &mut data.resized(offset as usize..end as usize))
 		else {
 			eprintln!("failed to parse anim {i} {arena_name}/{name}");
 			output.write(name, "", &data.buf()[offset as usize..end as usize]);
 			continue;
 		};
-		output.write(name, "anim.txt", format!("{anim:?}").as_bytes());
+		save_alienanim(name, &anim, output);
 	}
 
 	// meshes
@@ -992,16 +1018,20 @@ fn parse_bsp(data: &mut Reader) -> Bsp {
 	try_parse_bsp(data).expect("failed to parse bsp!")
 }
 
-struct AlienAnim {
+struct AlienAnim<'a> {
 	speed: f32,
-	np: u32,
-	nf: u32,
-	vectors: Vec<Vec3>,
-	parts: Vec<AlienAnimPart>,
+	//np: u32,
+	//nf: u32,
+	things: Vec<AlienAnimThing>,
+	parts: Vec<AlienAnimPart<'a>>,
 }
-struct AlienAnimPart {
+struct AlienAnimThing {
+	vec: Vec3,
+	data: Vec<Vec3>,
+}
+struct AlienAnimPart<'a> {
+	name: &'a str,
 	vecs: Vec<Vec3>,
-	count: u32,
 	data: AlienAnimPartType,
 }
 enum AlienAnimPartType {
@@ -1010,66 +1040,46 @@ enum AlienAnimPartType {
 }
 struct AlienAnimPartRow {
 	index: u16,
-	triples: Vec<[u8; 3]>,
-}
-impl std::fmt::Debug for AlienAnim {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		f.debug_struct("AlienAnim")
-			.field("speed", &self.speed)
-			.field("np", &self.np)
-			.field("nf", &self.nf)
-			.field("vectors", &self.vectors.len())
-			.field("parts", &self.parts)
-			.finish()
-	}
-}
-impl std::fmt::Debug for AlienAnimPart {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		f.debug_struct("AlienAnimPart")
-			.field("vecs", &self.vecs.len())
-			.field("count", &self.count)
-			.field("data", &self.data)
-			.finish()
-	}
-}
-impl std::fmt::Debug for AlienAnimPartType {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match self {
-			Self::A(a, rows) => f
-				.debug_struct("A")
-				.field("value", a)
-				.field("rows", &rows.len())
-				.finish(),
-			Self::B(b, rows) => f
-				.debug_struct("B")
-				.field("value", b)
-				.field("rows", &rows.len())
-				.finish(),
-		}
-	}
+	triples: Vec<[i8; 3]>,
 }
 
-fn try_parse_alienanim(data: &mut Reader) -> Option<AlienAnim> {
+fn try_parse_alienanim<'a>(name: &str, data: &mut Reader<'a>) -> Option<AlienAnim<'a>> {
 	let speed = data.try_f32()?;
 	data.resize(4..);
-	let np = data.try_u32()?;
-	let nf = data.try_u32()?;
+	let num_parts = data.try_u32()? as usize;
+	let num_things = data.try_u32()? as usize;
 
-	if np > 1000 || nf > 1000 {
+	if num_parts > 1000 || num_things > 1000 {
 		return None;
 	}
 
-	let offsets = data.try_get_vec::<u32>(np as usize)?;
+	let offsets = data.try_get_vec::<u32>(num_parts)?;
 	if offsets.iter().any(|o| *o as usize >= data.len()) {
 		return None;
 	}
-	let vectors = data.try_get_vec::<Vec3>(nf as usize)?;
-	// if vectors.iter().any(|v| *v != [0.0; 3]) {
-	// 	return None;
-	// }
 
-	let num_things = data.try_u32().filter(|n| *n <= 10000)?;
-	let things = data.try_get_vec::<Vec3>((num_things * nf) as usize)?;
+	let thing_vectors = data.try_get_vec::<Vec3>(num_things)?;
+	let thing_data_count = data.try_u32().filter(|n| *n <= 10000)? as usize;
+	let things_data = data.try_get_vec::<Vec3>(thing_data_count * num_things)?;
+
+	let mut things: Vec<AlienAnimThing> = if thing_data_count * num_things != 0 {
+		thing_vectors
+			.iter()
+			.zip(things_data.chunks_exact(thing_data_count))
+			.map(|(&vec, data)| AlienAnimThing {
+				vec,
+				data: data.to_owned(),
+			})
+			.collect()
+	} else {
+		thing_vectors
+			.iter()
+			.map(|&vec| AlienAnimThing {
+				vec,
+				data: Vec::new(),
+			})
+			.collect()
+	};
 
 	let mut parts = Vec::new();
 
@@ -1078,23 +1088,23 @@ fn try_parse_alienanim(data: &mut Reader) -> Option<AlienAnim> {
 		let mut data = data.resized_pos(..next as usize, offset as usize);
 
 		let name = data.try_str(12)?;
-		let count = data.try_u32().filter(|c| *c < 1000)?;
+		let count = data.try_u32().filter(|c| *c < 1000)? as usize;
 		let a = data.try_f32()?;
 		let part = if a == 0.0 {
 			let b = data.try_u16()?;
-			let vecs = data.try_get_vec::<Vec3>(count as usize)?;
-			let anim_data = data.try_get_vec::<[u8; 24]>(nf as usize)?;
+			let vecs = data.try_get_vec::<Vec3>(count)?;
+			let anim_data = data.try_get_vec::<[u8; 24]>(num_things)?;
 			AlienAnimPart {
+				name,
 				vecs,
-				count,
 				data: AlienAnimPartType::B(b, anim_data),
 			}
 		} else {
-			let vecs = data.try_get_vec::<Vec3>(count as usize)?;
-			let num_shorts = (count * 3 + 2) * (nf - 1);
+			let vecs = data.try_get_vec::<Vec3>(count)?;
+			//let num_shorts = (count * 3 + 2) * (num_things - 1);
 			let mut rows = Vec::new();
-			for j in 0..=nf {
-				if j == nf {
+			for j in 0..=num_things {
+				if j == num_things {
 					println!("too many rows");
 					return None;
 				}
@@ -1102,12 +1112,12 @@ fn try_parse_alienanim(data: &mut Reader) -> Option<AlienAnim> {
 				if index == 0xFFFF {
 					break;
 				}
-				let triples = data.try_get_vec::<[u8; 3]>(count as usize)?;
+				let triples = data.try_get_vec::<[i8; 3]>(count)?;
 				rows.push(AlienAnimPartRow { index, triples });
 			}
 			AlienAnimPart {
+				name,
 				vecs,
-				count,
 				data: AlienAnimPartType::A(a, rows),
 			}
 		};
@@ -1116,16 +1126,76 @@ fn try_parse_alienanim(data: &mut Reader) -> Option<AlienAnim> {
 			println!("animation data left over");
 			return None;
 		}
+
 		parts.push(part);
 	}
 
 	Some(AlienAnim {
 		speed,
-		np,
-		nf,
-		vectors,
+		things,
 		parts,
 	})
+}
+
+fn save_alienanim(name: &str, anim: &AlienAnim, output: &mut OutputWriter) {
+	let mut result = format!(
+		"speed: {}\nthing data count: {}\n\nthings ({}):\n",
+		anim.speed,
+		anim.things
+			.first()
+			.map(|t| t.data.len())
+			.unwrap_or_default(),
+		anim.things.len()
+	);
+	for (i, thing) in anim.things.iter().enumerate() {
+		writeln!(result, "\t[thing {i}] vec: {:?}", thing.vec).unwrap();
+		for (j, &data) in thing.data.iter().enumerate() {
+			writeln!(result, "\t\t[data {j}] {data:?}").unwrap();
+		}
+	}
+
+	writeln!(result, "\nparts ({}):", anim.parts.len()).unwrap();
+	for (i, part) in anim.parts.iter().enumerate() {
+		writeln!(
+			result,
+			"\t[part {i}] name: {}\n\t\tvecs ({}):",
+			part.name,
+			part.vecs.len()
+		)
+		.unwrap();
+		for (j, vec) in part.vecs.iter().enumerate() {
+			writeln!(result, "\t\t\t[vec {j}]: {vec:?}").unwrap();
+		}
+
+		match &part.data {
+			AlienAnimPartType::A(a, rows) => {
+				writeln!(result, "\t\tdata (A) a: {a}, rows ({}):", rows.len()).unwrap();
+				for (j, row) in rows.iter().enumerate() {
+					assert!(
+						(row.index as usize) < anim.things.len(),
+						"alienanim {name} row index {} out of range {}",
+						row.index,
+						anim.things.len()
+					);
+					writeln!(
+						result,
+						"\t\t\t[index {}] triples ({}):",
+						row.index,
+						row.triples.len(),
+					)
+					.unwrap();
+					for (k, triple) in row.triples.iter().enumerate() {
+						writeln!(result, "\t\t\t\t[triple {k:2}] {triple:3?}").unwrap();
+					}
+				}
+			}
+			AlienAnimPartType::B(b, data) => {
+				writeln!(result, "\t\tdata (B) b: {b}, data: {data:?}").unwrap();
+			}
+		}
+	}
+
+	output.write(name, "anim.txt", result.as_bytes());
 }
 
 fn parse_lbb(path: &Path) {
@@ -1135,7 +1205,7 @@ fn parse_lbb(path: &Path) {
 	let mut output = OutputWriter::new_no_dir(path);
 	output.path.pop();
 
-	let success = try_parse_image(&data, filename, &mut output);
+	let success = try_parse_image(filename, &data, &mut output);
 	assert!(success);
 }
 
@@ -1389,13 +1459,17 @@ fn parse_cmi(path: &Path) {
 		&mut arena_entries,
 	] {
 		let count = data.u32();
-		entries.extend((0..count).map(|_| {
+		entries.extend((0..count).filter_map(|_| {
 			let name = data.pascal_str();
 			let offset = data.u32();
-			let data = data.resized_pos(.., offset as usize);
-			(name, data)
+			if offset == 0 {
+				// mesh entries
+				None
+			} else {
+				let data = data.resized_pos(.., offset as usize);
+				Some((name, data))
+			}
 		}));
-		entries.retain(|e| e.1.position() != 0);
 	}
 
 	let output = OutputWriter::new(path);

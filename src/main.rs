@@ -1352,8 +1352,6 @@ translucent colours: {translucent_colours:08x?}\n"
 			full_height += 64 * 8;
 		}
 
-		println!("{filename} {sky_x} {sky_y} {sky_width} {sky_height}");
-
 		output.set_output_path("skybox", "png");
 		save_png(
 			&output.path,
@@ -1824,6 +1822,8 @@ fn save_mesh(name: &str, mesh: &Mesh, textures: &[ImageRef], output: &mut Output
 		gltf.add_mesh_simple(name.to_owned(), &primitives, new_mesh.material);
 	}
 
+	gltf.add_debug_points("Extras", mesh.extras.iter());
+
 	gltf.combine_buffers();
 
 	let result = serde_json::to_string(&gltf).unwrap();
@@ -1855,6 +1855,15 @@ fn save_multimesh(name: &str, multimesh: &Multimesh, output: &mut OutputWriter) 
 		let mesh_index = gltf.add_mesh_simple(submesh_name.to_owned(), &[verts, indices], None);
 		gltf.set_mesh_position(mesh_index, mesh.origin)
 	}
+
+	let extras = multimesh
+		.extras
+		.iter()
+		.chain(multimesh.meshes.iter().flat_map(|m| m.mesh.extras.iter()));
+	gltf.add_debug_points("Extras", extras);
+
+	gltf.combine_buffers();
+
 	output.write(name, "gltf", &serde_json::to_vec(&gltf).unwrap());
 }
 
@@ -1965,11 +1974,11 @@ fn main() {
 
 	let start_time = std::time::Instant::now();
 
-	//for_all_ext("assets", "dti", parse_dti);
-	//for_all_ext("assets", "bni", parse_bni);
-	//for_all_ext("assets", "mto", parse_mto);
-	//for_all_ext("assets", "sni", parse_sni);
-	//for_all_ext("assets", "mti", parse_mti);
+	for_all_ext("assets", "dti", parse_dti);
+	for_all_ext("assets", "bni", parse_bni);
+	for_all_ext("assets", "mto", parse_mto);
+	for_all_ext("assets", "sni", parse_sni);
+	for_all_ext("assets", "mti", parse_mti);
 	for_all_ext("assets", "cmi", parse_cmi);
 
 	//for_all_ext("assets", "lbb", parse_lbb);

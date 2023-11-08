@@ -192,7 +192,8 @@ pub struct Gltf {
 	textures: Vec<Texture>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	images: Vec<Image>,
-	samplers: [Sampler; 1],
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	samplers: Vec<Sampler>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	accessors: Vec<Accessor>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
@@ -238,6 +239,10 @@ impl Gltf {
 			sampler: 0,
 			source: image_index,
 		});
+
+		if self.samplers.is_empty() {
+			self.samplers.resize_with(1, Default::default);
+		}
 
 		let material_index = MaterialIndex(self.materials.len());
 		self.materials.push(Material {
@@ -386,6 +391,56 @@ impl Gltf {
 		}
 		self.buffers.truncate(1);
 	}
+
+	pub fn add_debug_points<'a>(&mut self, name: &str, points: impl Iterator<Item = &'a [f32; 3]>) {
+		let mut points = points.peekable();
+
+		if points.peek().is_none() {
+			return;
+		}
+
+		let (cube_verts, cube_indices) = make_cube(0.5);
+		let debug_mesh_primitives = [
+			self.add_positions(&cube_verts),
+			self.add_indices(&cube_indices),
+		];
+		let debug_mesh_material = self.add_colour("Debug".to_owned(), [1.0, 0.0, 1.0, 1.0]);
+
+		for (i, point) in points.enumerate() {
+			let mesh = self.add_mesh_simple(
+				format!("{name} {i}"),
+				&debug_mesh_primitives,
+				Some(debug_mesh_material),
+			);
+			self.set_mesh_position(mesh, *point);
+		}
+	}
+}
+
+const fn make_unit_cube() -> ([[f32; 3]; 8], [u16; 36]) {
+	let points = [
+		[-0.5, -0.5, -0.5],
+		[-0.5, -0.5, 0.5],
+		[-0.5, 0.5, -0.5],
+		[-0.5, 0.5, 0.5],
+		[0.5, -0.5, -0.5],
+		[0.5, -0.5, 0.5],
+		[0.5, 0.5, -0.5],
+		[0.5, 0.5, 0.5],
+	];
+	let indices = [
+		0, 2, 1, 1, 2, 3, 4, 5, 6, 6, 5, 7, 0, 1, 4, 4, 1, 5, 2, 6, 3, 3, 6, 7, 0, 2, 4, 4, 2, 6,
+		1, 5, 3, 3, 5, 7,
+	];
+	(points, indices)
+}
+
+fn make_cube(scale: f32) -> ([[f32; 3]; 8], [u16; 36]) {
+	const CUBE: ([[f32; 3]; 8], [u16; 36]) = make_unit_cube();
+	(
+		CUBE.0.map(|[x, y, z]| [x * scale, y * scale, z * scale]),
+		CUBE.1,
+	)
 }
 
 fn to_uri(data: &[u8]) -> String {

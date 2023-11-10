@@ -45,10 +45,7 @@ impl OutputWriter {
 		result
 	}
 	fn set_output_path(&mut self, asset_name: &str, ext: &str) -> &Path {
-		assert!(
-			!ext.starts_with('.'),
-			"extension should not start with a dot"
-		);
+		let ext = ext.trim_start_matches('.');
 		self.path.set_file_name(asset_name);
 		self.path.set_extension(ext);
 		&self.path
@@ -240,7 +237,7 @@ fn try_parse_anim(data: &mut Reader) -> Option<Vec<Anim>> {
 		if width > 5000 || height > 5000 {
 			return None;
 		}
-		let [a, b]: [_; 2] = data.try_get()?;
+		let [a, b]: [i16; 2] = data.try_get()?;
 
 		let mut pixels = vec![0; width as usize * height as usize];
 		'outer: for row in pixels.chunks_exact_mut(width as usize) {
@@ -333,7 +330,7 @@ fn parse_mti_data(output: &mut OutputWriter, buf: &[u8], pal: PalRef) {
 			let b = reader.f32();
 			let c = reader.f32();
 			let start_offset = reader.u32() as usize;
-			let mut data = reader.resized(start_offset..);
+			let mut data = reader.clone_at(start_offset);
 
 			let width: u32;
 			let height: u32;
@@ -345,14 +342,13 @@ fn parse_mti_data(output: &mut OutputWriter, buf: &[u8], pal: PalRef) {
 				height = data.u16() as u32;
 			} else {
 				flags2 = data.u32();
-				if flags & 0x10000 != 0 {
+				if flags == 0x10000 {
 					// animated
 					num_frames = flags2;
-				}
+				} // else handled below
 				width = data.u16() as u32;
 				height = data.u16() as u32;
 			}
-			// todo: other flags
 
 			let frame_size = (width * height) as usize;
 			if num_frames == 1 {
@@ -373,6 +369,22 @@ fn parse_mti_data(output: &mut OutputWriter, buf: &[u8], pal: PalRef) {
 					})
 					.collect();
 				save_anim(name, &anims, output, pal.clone());
+			}
+
+			if flags == 0x20000 {
+				// todo
+				let width = 96;
+				let height = 73;
+				let pixel_count = width as usize * height as usize;
+				let pixels = data.slice(pixel_count);
+				output.set_output_path(&format!("{name}_2"), "png");
+				save_png(
+					&output.path,
+					pixels,
+					width as u32,
+					height as u32,
+					pal.clone(),
+				);
 			}
 		}
 	}
@@ -791,13 +803,13 @@ fn parse_mto(path: &Path) {
 	let mut new_path = path.to_owned();
 	for _ in 0..num_arenas {
 		let arena_name = data.str(8);
-		let asset_offset = data.u32() as usize;
+		let arena_offset = data.u32() as usize;
 
 		new_path.push(arena_name);
 		let mut output = OutputWriter::new(&new_path);
 		new_path.pop();
 
-		let mut asset_reader = data.resized(asset_offset..);
+		let mut asset_reader = data.resized(arena_offset..);
 		let asset_filesize = asset_reader.u32();
 		asset_reader.resize(4..asset_filesize as usize);
 
@@ -813,8 +825,7 @@ fn parse_mto(path: &Path) {
 			// parse subfile
 			asset_reader.set_position(subfile_offset);
 			let offset1_len = asset_reader.u32() as usize;
-			let offset1_data =
-				&asset_reader.buf()[subfile_offset + 4..subfile_offset + 4 + offset1_len];
+			let offset1_data = &asset_reader.remaining_buf()[..offset1_len];
 			parse_mto_subthing(arena_name, offset1_data, &mut output);
 		}
 

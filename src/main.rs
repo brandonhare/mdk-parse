@@ -656,7 +656,7 @@ fn parse_bni(path: &Path) {
 			continue;
 		}
 
-		if let Some(anim) = try_parse_alienanim(name, &mut reader.clone()) {
+		if let Some(anim) = try_parse_alienanim(name, reader.clone()) {
 			save_alienanim(name, &anim, &mut output);
 			continue;
 		}
@@ -884,8 +884,7 @@ fn parse_mto_subthing(arena_name: &str, buf: &[u8], output: &mut OutputWriter) {
 	// animations?
 	for (i, &(name, offset)) in animations.iter().enumerate() {
 		let end = all_offsets[all_offsets.iter().position(|o| *o == offset).unwrap() + 1];
-		let Some(anim) =
-			try_parse_alienanim(name, &mut data.resized(offset as usize..end as usize))
+		let Some(anim) = try_parse_alienanim(name, data.resized(offset as usize..end as usize))
 		else {
 			eprintln!("failed to parse anim {i} {arena_name}/{name}");
 			output.write(name, "", &data.buf()[offset as usize..end as usize]);
@@ -1054,9 +1053,9 @@ struct AlienAnimPartRow {
 	triples: Vec<[i8; 3]>,
 }
 
-fn try_parse_alienanim<'a>(name: &str, data: &mut Reader<'a>) -> Option<AlienAnim<'a>> {
+fn try_parse_alienanim<'a>(name: &str, mut data: Reader<'a>) -> Option<AlienAnim<'a>> {
 	let speed = data.try_f32()?;
-	data.resize(4..);
+	data.resize(data.position()..);
 	let num_parts = data.try_u32()? as usize;
 	let num_things = data.try_u32()? as usize;
 
@@ -1133,10 +1132,12 @@ fn try_parse_alienanim<'a>(name: &str, data: &mut Reader<'a>) -> Option<AlienAni
 			}
 		};
 
+		/*/
 		if data.position() + 4 < next as usize {
 			println!("animation data left over");
 			return None;
 		}
+		*/
 
 		parts.push(part);
 	}
@@ -1477,19 +1478,20 @@ fn parse_cmi(path: &Path) {
 				// mesh entries
 				None
 			} else {
-				let data = data.resized_pos(.., offset as usize);
+				let data = data.clone_at(offset as usize);
 				Some((name, data))
 			}
 		}));
 	}
 
 	let output = OutputWriter::new(path);
+	let mut anim_offsets = Vec::new();
 
 	// process init entries
 	{
 		let mut init_output = None;
 		for (name, mut data) in init_entries {
-			let cmi = cmi_bytecode::parse_cmi(filename, name, &mut data);
+			let cmi = cmi_bytecode::parse_cmi(filename, name, &mut data, &mut anim_offsets);
 			let init_output = init_output.get_or_insert_with(|| output.push_dir("init"));
 			init_output.write(name, "txt", cmi.as_bytes());
 		}
@@ -1516,7 +1518,7 @@ fn parse_cmi(path: &Path) {
 	{
 		let mut setup_output = output.push_dir("setup");
 		for (name, mut data) in setup_entries {
-			let cmi = cmi_bytecode::parse_cmi(filename, name, &mut data);
+			let cmi = cmi_bytecode::parse_cmi(filename, name, &mut data, &mut anim_offsets);
 			setup_output.write(name, "txt", cmi.as_bytes());
 		}
 	}
@@ -1530,14 +1532,29 @@ fn parse_cmi(path: &Path) {
 			let offset = data.u32() as usize;
 
 			data.set_position(offset);
-			let cmi = cmi_bytecode::parse_cmi(filename, name, &mut data);
-
+			let cmi = cmi_bytecode::parse_cmi(filename, name, &mut data, &mut anim_offsets);
 			arena_output.write(
 				name,
 				"txt",
 				format!("name: {name}, music 1: \"{str1}\", music 2: \"{music}\"\n\n{cmi}")
 					.as_bytes(),
 			);
+		}
+	}
+
+	// save anims
+	{
+		let mut anim_output = output.push_dir("anims");
+		anim_offsets.sort_unstable();
+		anim_offsets.dedup();
+		for offset in anim_offsets {
+			let name = format!("{offset:06X}");
+			let anim_reader = data.resized(offset as usize..);
+			if let Some(anim) = try_parse_alienanim(&name, anim_reader) {
+				save_alienanim(&name, &anim, &mut anim_output)
+			} else {
+				eprintln!("{filename}/{name} failed to parse alienanim at offset {offset:06X}");
+			}
 		}
 	}
 }

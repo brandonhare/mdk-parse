@@ -775,9 +775,9 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader, anims: &mut Ve
 				}
 				0x60 => {
 					let pos = reader.vec3();
-					let angle = reader.f32();
+					let radius = reader.f32();
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Trigger? (pos?)] pos: {pos:?}, angle: {angle}, {branch}");
+					wl!("Trigger (sphere)] pos: {pos:?}, radius: {radius}, {branch}");
 				}
 				0x61 => {
 					let on = reader.u8();

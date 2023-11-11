@@ -410,21 +410,6 @@ fn parse_mti_data(output: &mut OutputWriter, buf: &[u8], pal: PalRef) {
 	);
 }
 
-fn get_bits(n: u32) -> u32 {
-	let mut i = 0xC;
-	let mut result = 0;
-	while i != 0 {
-		if n <= 1 << result & 0x3F {
-			return result;
-		};
-		result += 1;
-		i -= 1;
-	}
-	result
-}
-
-//static PALS: std::sync::OnceLock<Mutex<HashMap<String, Box<[u8]>>>> = OnceLock::new();
-
 thread_local! {
 	static PALS : RefCell<HashMap<String, Rc<[u8]>>> = Default::default();
 }
@@ -1032,10 +1017,10 @@ struct AlienAnim<'a> {
 	speed: f32,
 	//np: u32,
 	//nf: u32,
-	things: Vec<AlienAnimThing>,
+	frames: Vec<AlienAnimFrame>,
 	parts: Vec<AlienAnimPart<'a>>,
 }
-struct AlienAnimThing {
+struct AlienAnimFrame {
 	vec: Vec3,
 	data: Vec<Vec3>,
 }
@@ -1045,21 +1030,21 @@ struct AlienAnimPart<'a> {
 	data: AlienAnimPartType,
 }
 enum AlienAnimPartType {
-	A(f32, Vec<AlienAnimPartRow>),
-	B(u16, Vec<[u8; 24]>),
+	Vecs(Vec<AlienAnimPartRow>),
+	Transforms(Vec<[[f32; 4]; 3]>),
 }
 struct AlienAnimPartRow {
 	index: u16,
-	triples: Vec<[i8; 3]>,
+	triples: Vec<Vec3>,
 }
 
 fn try_parse_alienanim<'a>(name: &str, mut data: Reader<'a>) -> Option<AlienAnim<'a>> {
 	let speed = data.try_f32()?;
 	data.resize(data.position()..);
 	let num_parts = data.try_u32()? as usize;
-	let num_things = data.try_u32()? as usize;
+	let num_frames = data.try_u32()? as usize;
 
-	if num_parts > 1000 || num_things > 1000 {
+	if num_parts > 1000 || num_frames > 1000 {
 		return None;
 	}
 
@@ -1068,23 +1053,26 @@ fn try_parse_alienanim<'a>(name: &str, mut data: Reader<'a>) -> Option<AlienAnim
 		return None;
 	}
 
-	let thing_vectors = data.try_get_vec::<Vec3>(num_things)?;
-	let thing_data_count = data.try_u32().filter(|n| *n <= 10000)? as usize;
-	let things_data = data.try_get_vec::<Vec3>(thing_data_count * num_things)?;
+	// someAnimVector (local space)
+	let frame_vectors = data.try_get_vec::<Vec3>(num_frames)?;
 
-	let mut things: Vec<AlienAnimThing> = if thing_data_count * num_things != 0 {
-		thing_vectors
+	let frames_data_count = data.try_u32().filter(|n| *n <= 10000)? as usize;
+	// part locations ?
+	let frames_data = data.try_get_vec::<Vec3>(frames_data_count * num_frames)?;
+
+	let mut frames: Vec<AlienAnimFrame> = if frames_data_count * num_frames != 0 {
+		frame_vectors
 			.iter()
-			.zip(things_data.chunks_exact(thing_data_count))
-			.map(|(&vec, data)| AlienAnimThing {
+			.zip(frames_data.chunks_exact(frames_data_count))
+			.map(|(&vec, data)| AlienAnimFrame {
 				vec,
 				data: data.to_owned(),
 			})
 			.collect()
 	} else {
-		thing_vectors
+		frame_vectors
 			.iter()
-			.map(|&vec| AlienAnimThing {
+			.map(|&vec| AlienAnimFrame {
 				vec,
 				data: Vec::new(),
 			})
@@ -1099,22 +1087,37 @@ fn try_parse_alienanim<'a>(name: &str, mut data: Reader<'a>) -> Option<AlienAnim
 
 		let name = data.try_str(12)?;
 		let count = data.try_u32().filter(|c| *c < 1000)? as usize;
-		let a = data.try_f32()?;
-		let part = if a == 0.0 {
-			let b = data.try_u16()?;
+		let scale = data.try_f32()?;
+		let part = if scale == 0.0 {
+			let scale_vec = (0x8000 >> (data.try_u8()? & 0x3F)) as f32;
+			let scale_pos = (0x8000 >> (data.try_u8()? & 0x3F)) as f32;
 			let vecs = data.try_get_vec::<Vec3>(count)?;
-			let anim_data = data.try_get_vec::<[u8; 24]>(num_things)?;
+
+			// let anim_data = data.try_get_vec::<[i16; 12]>(num_frames)?;
+			let transforms = (0..num_frames)
+				.map(|_| {
+					let mut result = [[0.0; 4]; 3];
+					for row in &mut result {
+						for value in &mut row[..3] {
+							*value = data.try_i16()? as f32 / scale_vec;
+						}
+						row[3] = data.try_i16()? as f32 / scale_pos;
+					}
+					Some(result)
+				})
+				.collect::<Option<Vec<_>>>()?;
+			// todo verify
+
 			AlienAnimPart {
 				name,
 				vecs,
-				data: AlienAnimPartType::B(b, anim_data),
+				data: AlienAnimPartType::Transforms(transforms),
 			}
 		} else {
 			let vecs = data.try_get_vec::<Vec3>(count)?;
-			//let num_shorts = (count * 3 + 2) * (num_things - 1);
 			let mut rows = Vec::new();
-			for j in 0..=num_things {
-				if j == num_things {
+			for j in 0..=num_frames {
+				if j == num_frames {
 					println!("too many rows");
 					return None;
 				}
@@ -1122,13 +1125,22 @@ fn try_parse_alienanim<'a>(name: &str, mut data: Reader<'a>) -> Option<AlienAnim
 				if index == 0xFFFF {
 					break;
 				}
-				let triples = data.try_get_vec::<[i8; 3]>(count)?;
+
+				//let triples = data.try_get_vec::<[i8; 3]>(count)?;
+				let triples = (0..count)
+					.map(|_| {
+						data.try_get::<[i8; 3]>()
+							.map(|ns| ns.map(|n| n as f32 * scale))
+					})
+					.collect::<Option<Vec<Vec3>>>()?;
+				// todo verify
+
 				rows.push(AlienAnimPartRow { index, triples });
 			}
 			AlienAnimPart {
 				name,
 				vecs,
-				data: AlienAnimPartType::A(a, rows),
+				data: AlienAnimPartType::Vecs(rows),
 			}
 		};
 
@@ -1144,24 +1156,24 @@ fn try_parse_alienanim<'a>(name: &str, mut data: Reader<'a>) -> Option<AlienAnim
 
 	Some(AlienAnim {
 		speed,
-		things,
+		frames,
 		parts,
 	})
 }
 
 fn save_alienanim(name: &str, anim: &AlienAnim, output: &mut OutputWriter) {
 	let mut result = format!(
-		"speed: {}\nthing data count: {}\n\nthings ({}):\n",
+		"speed: {}\nframe data count: {}\n\nframes: ({}):\n",
 		anim.speed,
-		anim.things
+		anim.frames
 			.first()
 			.map(|t| t.data.len())
 			.unwrap_or_default(),
-		anim.things.len()
+		anim.frames.len()
 	);
-	for (i, thing) in anim.things.iter().enumerate() {
-		writeln!(result, "\t[thing {i}] vec: {:?}", thing.vec).unwrap();
-		for (j, &data) in thing.data.iter().enumerate() {
+	for (i, frame) in anim.frames.iter().enumerate() {
+		writeln!(result, "\t[frame {i}] vec: {:?}", frame.vec).unwrap();
+		for (j, &data) in frame.data.iter().enumerate() {
 			writeln!(result, "\t\t[data {j}] {data:?}").unwrap();
 		}
 	}
@@ -1180,18 +1192,18 @@ fn save_alienanim(name: &str, anim: &AlienAnim, output: &mut OutputWriter) {
 		}
 
 		match &part.data {
-			AlienAnimPartType::A(a, rows) => {
-				writeln!(result, "\t\tdata (A) a: {a}, rows ({}):", rows.len()).unwrap();
+			AlienAnimPartType::Vecs(rows) => {
+				writeln!(result, "\t\tdata Vecs ({}):", rows.len()).unwrap();
 				for (j, row) in rows.iter().enumerate() {
 					assert!(
-						(row.index as usize) < anim.things.len(),
+						(row.index as usize) < anim.frames.len(),
 						"alienanim {name} row index {} out of range {}",
 						row.index,
-						anim.things.len()
+						anim.frames.len()
 					);
 					writeln!(
 						result,
-						"\t\t\t[index {}] triples ({}):",
+						"\t\t\t[frame {}] triples ({}):",
 						row.index,
 						row.triples.len(),
 					)
@@ -1201,8 +1213,11 @@ fn save_alienanim(name: &str, anim: &AlienAnim, output: &mut OutputWriter) {
 					}
 				}
 			}
-			AlienAnimPartType::B(b, data) => {
-				writeln!(result, "\t\tdata (B) b: {b}, data: {data:?}").unwrap();
+			AlienAnimPartType::Transforms(transforms) => {
+				writeln!(result, "\t\tdata Transforms ({}):", transforms.len()).unwrap();
+				for (j, transform) in transforms.iter().enumerate() {
+					writeln!(result, "\t\t\t[frame {j}] transform: {transform:?}",).unwrap()
+				}
 			}
 		}
 	}

@@ -332,23 +332,18 @@ fn parse_mti_data(output: &mut OutputWriter, buf: &[u8], pal: PalRef) {
 			let start_offset = reader.u32() as usize;
 			let mut data = reader.clone_at(start_offset);
 
-			let width: u32;
-			let height: u32;
 			let mut num_frames = 1;
-			let mut flags2 = 0;
+			let flags_mask = flags & 0x30000;
+			let flags2 = flags & 0xFFFF;
 
-			if flags & 0x30000 == 0 {
-				width = data.u16() as u32;
-				height = data.u16() as u32;
-			} else {
-				flags2 = data.u32();
-				if flags == 0x10000 {
-					// animated
-					num_frames = flags2;
-				} // else handled below
-				width = data.u16() as u32;
-				height = data.u16() as u32;
+			if flags_mask != 0 {
+				num_frames = data.u32();
+				if flags_mask == 0x20000 {
+					num_frames = 1; // todo
+				}
 			}
+			let width = data.u16() as u32;
+			let height = data.u16() as u32;
 
 			let frame_size = (width * height) as usize;
 			if num_frames == 1 {
@@ -369,22 +364,6 @@ fn parse_mti_data(output: &mut OutputWriter, buf: &[u8], pal: PalRef) {
 					})
 					.collect();
 				save_anim(name, &anims, output, pal.clone());
-			}
-
-			if flags == 0x20000 {
-				// todo
-				let width = 96;
-				let height = 73;
-				let pixel_count = width as usize * height as usize;
-				let pixels = data.slice(pixel_count);
-				output.set_output_path(&format!("{name}_2"), "png");
-				save_png(
-					&output.path,
-					pixels,
-					width as u32,
-					height as u32,
-					pal.clone(),
-				);
 			}
 		}
 	}
@@ -1486,20 +1465,21 @@ fn parse_cmi(path: &Path) {
 		&mut arena_entries,
 	] {
 		let count = data.u32();
-		entries.extend((0..count).filter_map(|_| {
+		entries.extend((0..count).map(|_| {
 			let name = data.pascal_str();
 			let offset = data.u32();
 			if offset == 0 {
 				// mesh entries
-				None
+				(name, data.resized(..0))
 			} else {
 				let data = data.clone_at(offset as usize);
-				Some((name, data))
+				(name, data)
 			}
 		}));
 	}
 
 	let output = OutputWriter::new(path);
+
 	let mut anim_offsets = Vec::new();
 
 	// process init entries
@@ -1515,7 +1495,13 @@ fn parse_cmi(path: &Path) {
 	// process mesh entries
 	{
 		let mut mesh_output = output.push_dir("meshes");
+		let mut empty = String::new();
 		for (name, mut data) in mesh_entries {
+			if data.is_empty() {
+				empty.push_str(name);
+				empty.push('\n');
+				continue;
+			}
 			let mesh_type = data.i32();
 			if mesh_type == 0 {
 				let mesh = parse_mesh(&mut data, true);
@@ -1526,6 +1512,9 @@ fn parse_cmi(path: &Path) {
 			} else {
 				panic!("invalid mesh type for {name} in {filename}: {mesh_type}");
 			}
+		}
+		if !empty.is_empty() {
+			mesh_output.write("others", "txt", empty.as_bytes());
 		}
 	}
 

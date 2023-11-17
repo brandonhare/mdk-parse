@@ -895,7 +895,7 @@ struct Multimesh {
 	textures: Vec<String>,
 	meshes: Vec<Submesh>,
 	bbox: [Vec3; 2],
-	extras: Vec<Vec3>, // todo what are these
+	reference_points: Vec<Vec3>,
 }
 
 #[derive(Debug)]
@@ -1824,14 +1824,14 @@ fn try_parse_multimesh(data: &mut Reader) -> Option<Multimesh> {
 	}
 	let bbox = data.try_get()?;
 
-	let num_extras = data.u32();
-	let extras = data.try_get_vec::<Vec3>(num_extras as usize)?;
+	let num_reference_points = data.u32();
+	let reference_points = data.try_get_vec::<Vec3>(num_reference_points as usize)?;
 
 	Some(Multimesh {
 		textures,
 		meshes,
 		bbox,
-		extras,
+		reference_points,
 	})
 }
 
@@ -1963,7 +1963,7 @@ fn save_multimesh(name: &str, multimesh: &Multimesh, output: &mut OutputWriter) 
 	}
 
 	let extras = multimesh
-		.extras
+		.reference_points
 		.iter()
 		.chain(multimesh.meshes.iter().flat_map(|m| m.mesh.extras.iter()));
 	gltf.add_debug_points("Extras", extras);

@@ -57,6 +57,18 @@ impl OutputWriter {
 		self.path.set_file_name(asset_name);
 		fs::write(&self.path, data).expect("failed to write file");
 	}
+
+	fn write_png(
+		&mut self, asset_name: &str, pixels: &[u8], width: u32, height: u32, palette: PalRef,
+	) {
+		save_png(
+			self.set_output_path(asset_name, "png"),
+			pixels,
+			width,
+			height,
+			palette,
+		)
+	}
 }
 
 struct DataFile<'a>(&'a Path, Vec<u8>);
@@ -127,6 +139,21 @@ fn read_file(path: &Path) -> DataFile {
 	DataFile(path, data)
 }
 
+// puts the reader back to its initial position if the wav read fails
+fn try_read_wav<'a>(reader: &mut Reader<'a>) -> Option<&'a [u8]> {
+	let start_pos = reader.position();
+	if reader.try_slice(4) == Some(b"RIFF") {
+		if let Some(length) = reader.try_u32() {
+			if reader.try_slice(4) == Some(b"WAVE") {
+				reader.set_position(start_pos);
+				return reader.try_slice(length as usize + 8);
+			}
+		}
+	}
+	reader.set_position(start_pos);
+	None
+}
+
 fn parse_sni(path: &Path) {
 	let buf = read_file(path);
 	let filename = get_filename(path);
@@ -166,27 +193,24 @@ fn parse_sni(path: &Path) {
 
 		let mut entry_reader = reader.resized(start_offset..start_offset + file_size);
 		if entry_type == -1 {
-			let anims = try_parse_anim(&mut entry_reader).expect("failed to parse sni anim");
+			let anims = try_parse_anim(entry_reader.clone()).expect("failed to parse sni anim");
 			//assert_eq!(entry_reader.position(), file_size);
 			save_anim(
 				entry_name,
 				&anims,
 				&mut output,
-				get_pal(filename, entry_name),
+				get_pal(filename, entry_name).as_deref(),
 			);
 		} else if entry_type == 0 {
 			let bsp = try_parse_bsp(&mut entry_reader).expect("failed to parse sni bsp");
 			assert_eq!(entry_reader.position(), file_size);
 			save_bsp(entry_name, &bsp, &mut output);
+		} else if let Some(wav) = try_read_wav(&mut entry_reader) {
+			output.write(entry_name, "wav", wav);
 		} else {
 			// todo what else is in entry_type
-			let data = entry_reader.remaining_slice();
-			if data.starts_with(b"RIFF") {
-				output.write(entry_name, "wav", data);
-			} else {
-				println!("unknown sni entry {entry_name}");
-				output.write(entry_name, "", data);
-			}
+			println!("unknown sni entry {entry_name}");
+			output.write(entry_name, "", entry_reader.remaining_slice());
 		}
 	}
 
@@ -214,9 +238,9 @@ struct Anim {
 	pixels: Vec<u8>,
 }
 
-fn try_parse_anim(data: &mut Reader) -> Option<Vec<Anim>> {
+fn try_parse_anim(mut data: Reader) -> Option<Vec<Anim>> {
 	let filesize = data.try_u32()? as usize;
-	data.resize(4..data.len());
+	data.resize(data.position()..data.len());
 	if filesize > data.len() {
 		return None;
 	}
@@ -300,7 +324,7 @@ fn parse_mti(path: &Path) {
 
 	let mut output = OutputWriter::new(path);
 
-	parse_mti_data(&mut output, &buf, pal)
+	parse_mti_data(&mut output, &buf, pal.as_deref())
 }
 fn parse_mti_data(output: &mut OutputWriter, buf: &[u8], pal: PalRef) {
 	let mut reader = Reader::new(buf);
@@ -348,8 +372,7 @@ fn parse_mti_data(output: &mut OutputWriter, buf: &[u8], pal: PalRef) {
 			let frame_size = (width * height) as usize;
 			if num_frames == 1 {
 				let pixels = data.slice(frame_size);
-				output.set_output_path(name, "png");
-				save_png(&output.path, pixels, width, height, pal.clone());
+				output.write_png(name, pixels, width, height, pal);
 			} else {
 				let anims: Vec<Anim> = (0..num_frames)
 					.map(|_| {
@@ -363,7 +386,7 @@ fn parse_mti_data(output: &mut OutputWriter, buf: &[u8], pal: PalRef) {
 						}
 					})
 					.collect();
-				save_anim(name, &anims, output, pal.clone());
+				save_anim(name, &anims, output, pal);
 			}
 		}
 	}
@@ -393,8 +416,8 @@ thread_local! {
 	static PALS : RefCell<HashMap<String, Rc<[u8]>>> = Default::default();
 }
 
-type PalRef = Option<Rc<[u8]>>;
-fn get_pal(filename: &str, name: &str) -> PalRef {
+type PalRef<'a> = Option<&'a [u8]>;
+fn get_pal(filename: &str, name: &str) -> Option<Rc<[u8]>> {
 	let temp: String;
 	let asset_name = match filename {
 		"STREAM.BNI" | "STREAM.MTI" => "STREAM",
@@ -415,7 +438,7 @@ fn get_pal(filename: &str, name: &str) -> PalRef {
 	}
 	result
 }
-fn set_pal(filename: &str, asset_name: &str, pal: &[u8]) -> PalRef {
+fn set_pal(filename: &str, asset_name: &str, pal: &[u8]) -> Option<Rc<[u8]>> {
 	let asset_name = match (asset_name, filename) {
 		("PAL", "STREAM.BNI") => "STREAM",
 		("PAL", "STATS.BNI") => "STATS",
@@ -504,8 +527,8 @@ fn parse_bni(path: &Path) {
 	for (i, &BniHeader { name, data }) in headers.iter().enumerate() {
 		// audio
 		let mut reader = Reader::new(data);
-		if matches!(&data[..4], b"RIFF") {
-			output.write(name, "wav", reader.remaining_slice());
+		if let Some(wav) = try_read_wav(&mut reader) {
+			output.write(name, "wav", wav);
 			continue;
 		}
 
@@ -537,27 +560,25 @@ fn parse_bni(path: &Path) {
 			}
 			assert!(reader.remaining_buf().is_empty());
 
-			output.set_output_path(&format!("{name}_1"), "png");
-			save_png(
-				&output.path,
+			output.write_png(
+				&format!("{name}_1"),
 				&result,
 				width as u32,
 				height as u32,
-				Some(lut1.into()),
+				Some(lut1),
 			);
-			output.set_output_path(&format!("{name}_2"), "png");
-			save_png(
-				&output.path,
+			output.write_png(
+				&format!("{name}_2"),
 				&result,
 				width as u32,
 				height as u32,
-				Some(lut2.into()),
+				Some(lut2),
 			);
 			continue;
 		}
 		// overlay
 		if name == "SNIPERS2" {
-			parse_overlay(name, data, &mut output, get_pal(filename, name));
+			parse_overlay(name, data, &mut output, get_pal(filename, name).as_deref());
 			continue;
 		}
 
@@ -591,22 +612,26 @@ fn parse_bni(path: &Path) {
 			let height = reader.u16() as usize;
 
 			if width * height == reader.remaining_len() {
-				output.set_output_path(name, "png");
 				let pal = get_pal(filename, name);
-				save_png(
-					&output.path,
+				output.write_png(
+					name,
 					reader.slice(width * height),
 					width as u32,
 					height as u32,
-					pal,
+					pal.as_deref(),
 				);
 				continue;
 			}
 			reader.set_position(pos);
 		}
 
-		if let Some(anims) = try_parse_anim(&mut reader.clone()) {
-			save_anim(name, &anims, &mut output, get_pal(filename, name));
+		if let Some(anims) = try_parse_anim(reader.clone()) {
+			save_anim(
+				name,
+				&anims,
+				&mut output,
+				get_pal(filename, name).as_deref(),
+			);
 			continue;
 		}
 
@@ -627,9 +652,8 @@ fn parse_bni(path: &Path) {
 
 		// raw image
 		if data.len() == 640 * 480 {
-			output.set_output_path(name, "png");
 			let pal = get_pal(filename, name);
-			save_png(&output.path, reader.remaining_slice(), 640, 480, pal);
+			output.write_png(name, reader.remaining_slice(), 640, 480, pal.as_deref());
 			continue;
 		}
 
@@ -646,7 +670,12 @@ fn parse_bni(path: &Path) {
 	}
 
 	if !zooms.is_empty() {
-		save_zoom("ZOOM", &zooms, &mut output, get_pal(filename, "ZOOM")); // todo palette
+		save_zoom(
+			"ZOOM",
+			&zooms,
+			&mut output,
+			get_pal(filename, "ZOOM").as_deref(),
+		); // todo palette
 	}
 }
 
@@ -721,8 +750,7 @@ fn parse_overlay(name: &str, data: &[u8], output: &mut OutputWriter, pal: PalRef
 		}
 	}
 
-	output.set_output_path(name, "png");
-	save_png(&output.path, &dest, width as u32, height as u32, pal);
+	output.write_png(name, &dest, width as u32, height as u32, pal);
 }
 
 fn try_parse_image(name: &str, data: &[u8], output: &mut OutputWriter) -> bool {
@@ -741,13 +769,7 @@ fn try_parse_image(name: &str, data: &[u8], output: &mut OutputWriter) -> bool {
 	#[cfg(feature = "readranges")]
 	let _ = Reader::new(data).slice(0x300 + 4 + width * height);
 
-	save_png(
-		&output.path,
-		pixel_data,
-		width as _,
-		height as _,
-		Some(lut.into()),
-	);
+	output.write_png(name, pixel_data, width as _, height as _, Some(lut));
 	true
 }
 
@@ -813,7 +835,11 @@ fn parse_mto(path: &Path) {
 
 		{
 			// output matfile
-			parse_mti_data(&mut output, matfile_data, get_pal(arena_name, arena_name));
+			parse_mti_data(
+				&mut output,
+				matfile_data,
+				get_pal(arena_name, arena_name).as_deref(),
+			);
 		}
 	}
 }
@@ -874,13 +900,14 @@ fn parse_mto_subthing(arena_name: &str, buf: &[u8], output: &mut OutputWriter) {
 
 	// sounds
 	for &(sound_name, looping, b, sound_offset, sound_length) in &sound_headers {
-		let mut reader =
-			Reader::new(&buf[sound_offset as usize..sound_offset as usize + sound_length as usize]);
-		let data = reader.buf();
-		assert!(data.starts_with(b"RIFF"));
 		assert_eq!(b, 0x7FFF);
 		assert!(looping == 0 || looping == 1);
-		output.write(sound_name, "wav", reader.remaining_slice());
+
+		let mut reader =
+			Reader::new(&buf[sound_offset as usize..sound_offset as usize + sound_length as usize]);
+
+		let data = try_read_wav(&mut reader).expect("invalid wav file!");
+		output.write(sound_name, "wav", data);
 	}
 }
 
@@ -1428,13 +1455,12 @@ translucent colours: {translucent_colours:08x?}\n"
 			full_height += 64 * 8;
 		}
 
-		output.set_output_path("skybox", "png");
-		save_png(
-			&output.path,
+		output.write_png(
+			"skybox",
 			&pixels,
 			dest_width as u32,
 			full_height as u32,
-			pal,
+			pal.as_deref(),
 		);
 	}
 }
@@ -1563,6 +1589,184 @@ fn parse_cmi(path: &Path) {
 	}
 }
 
+struct FontLetter<'a> {
+	code: u8,
+	width: u8,
+	height: u8,
+	pixels: &'a [u8],
+}
+fn parse_font_letters(mut data: Reader) -> Vec<FontLetter> {
+	let mut result = Vec::with_capacity(256);
+	for i in 0..=255 {
+		let offset = data.u32();
+		if offset == 0 {
+			continue;
+		}
+		let mut data = data.clone_at(offset as usize);
+
+		let height_base = data.i8();
+		let height_offset = data.i8();
+		let height = (height_base + height_offset + 1) as u8;
+		let width = data.u8();
+
+		let pixels = data.slice(width as usize * height as usize);
+
+		result.push(FontLetter {
+			code: i,
+			width,
+			height,
+			pixels,
+		});
+	}
+	result
+}
+
+fn save_font_grid(name: &str, letters: &[FontLetter], output: &mut OutputWriter, pal: PalRef) {
+	let (cell_width, cell_height, max_code) =
+		letters.iter().fold((0, 0, 0), |(w, h, c), letter| {
+			(
+				w.max(letter.width as usize),
+				h.max(letter.height as usize),
+				c.max(letter.code),
+			)
+		});
+	assert!(
+		cell_width > 0 && cell_height > 0 && max_code > 0,
+		"invalid font dimensions!"
+	);
+
+	let cells_per_row = 16;
+	let num_rows = (max_code as usize).div_ceil(cells_per_row);
+
+	let row_width = cell_width * cells_per_row;
+	let row_stride = row_width * cell_height;
+
+	let mut result = vec![0; num_rows * row_stride];
+
+	for letter in letters {
+		let col_index = letter.code as usize % cells_per_row;
+		let row_index = letter.code as usize / cells_per_row;
+		let result = &mut result[row_index * row_stride + col_index * cell_width..];
+		for (dest, src) in result
+			.chunks_mut(row_width)
+			.zip(letter.pixels.chunks_exact(letter.width as usize))
+		{
+			dest[..letter.width as usize].copy_from_slice(src);
+		}
+	}
+
+	output.write_png(
+		name,
+		&result,
+		row_width as u32,
+		(num_rows * cell_height) as u32,
+		pal,
+	)
+}
+
+fn parse_fti(path: &Path) {
+	let buf = read_file(path);
+	let filename = get_filename(path);
+	let mut data = Reader::new(&buf);
+
+	let filesize = data.u32() + 4;
+	assert_eq!(data.len(), filesize as usize, "filesize does not match");
+	data.resize(4..);
+
+	let mut output = OutputWriter::new(path);
+
+	let num_things = data.u32();
+	let mut offsets: Vec<_> = (0..num_things)
+		.map(|_| {
+			let name = data.str(8);
+			let offset = data.u32();
+			(name, data.clone_at(offset as usize))
+		})
+		.collect();
+
+	for i in 0..offsets.len().saturating_sub(1) {
+		let next_start_pos = offsets[i + 1].1.position();
+		offsets[i].1.set_end(next_start_pos);
+	}
+
+	let pal = offsets
+		.iter()
+		.find(|(name, _)| *name == "SYS_PAL")
+		.unwrap()
+		.1
+		.clone()
+		.remaining_slice();
+
+	let mut strings = String::new();
+	for (name, mut reader) in offsets {
+		let offset = reader.position();
+		match name {
+			"ARROW" => {
+				let anims = try_parse_anim(reader.clone());
+				save_anim(name, &anims.unwrap(), &mut output, Some(pal));
+			}
+			"SYS_PAL" => {
+				let pixels = reader.slice(8 * 8 * 3);
+				save_pal(output.set_output_path(name, "png"), pixels);
+			}
+			"SND_PUSH" => {
+				output.write(
+					name,
+					"wav",
+					try_read_wav(&mut reader).expect("expected a wav file!"),
+				);
+			}
+			"F8" => {
+				let mut letter_pixels = [[0; 8 * 8]; 128];
+				let letters: Vec<FontLetter> = letter_pixels
+					.iter_mut()
+					.enumerate()
+					.map(|(i, pixels)| {
+						for row in pixels.chunks_exact_mut(8) {
+							let mut b = reader.u8();
+							for p in row {
+								if b & 0x80 != 0 {
+									*p = 1;
+								}
+								b <<= 1;
+							}
+						}
+						FontLetter {
+							code: i as u8,
+							width: 8,
+							height: 8,
+							pixels,
+						}
+					})
+					.collect();
+
+				save_font_grid(name, &letters, &mut output, Some(pal));
+			}
+			"FONTBIG" | "FONTSML" => {
+				let font_letters = parse_font_letters(reader.resized(reader.position()..));
+				save_font_grid(name, &font_letters, &mut output, Some(pal));
+			}
+			_ => {
+				write!(strings, "{name:8}\t").unwrap();
+				loop {
+					let c = reader.u8();
+					match c {
+						0 => break,
+						b' '..=b'~' => strings.push(c as char),
+						b'\t' => strings.push_str("\\t"),
+						149 => strings.push('ę'),
+						150 => strings.push('ń'),
+						230 => strings.push('ć'),
+						_ => panic!("{name}: unknown charcode {c}"),
+					}
+				}
+				strings.push('\n');
+			}
+		}
+	}
+	output.write("strings", "txt", strings.as_bytes());
+}
+
 fn save_anim(name: &str, anims: &[Anim], output: &mut OutputWriter, pal: PalRef) {
 	assert!(!anims.is_empty());
 	output.set_output_path(name, "png");
@@ -1592,7 +1796,7 @@ fn save_anim(name: &str, anims: &[Anim], output: &mut OutputWriter, pal: PalRef)
 	let width = (max_x + offset_x) as usize;
 	let height = (max_y + offset_y) as usize;
 
-	let mut encoder = setup_png(&output.path, width as u32, height as u32, &pal);
+	let mut encoder = setup_png(&output.path, width as u32, height as u32, pal);
 	encoder.set_animated(anims.len() as u32, 0).unwrap();
 	encoder.set_sep_def_img(false).unwrap();
 	encoder.set_frame_delay(1, 12).unwrap();
@@ -1635,7 +1839,7 @@ fn save_bsp(name: &str, bsp: &Bsp, output: &mut OutputWriter) {
 }
 
 fn setup_png<'a>(
-	path: &Path, width: u32, height: u32, palette: &'a PalRef,
+	path: &Path, width: u32, height: u32, palette: Option<&'a [u8]>,
 ) -> png::Encoder<'a, impl std::io::Write> {
 	let mut trns = [255; 16 * 16];
 	let mut encoder = png::Encoder::new(
@@ -1649,7 +1853,7 @@ fn setup_png<'a>(
 			*alpha = if rgb == [255, 0, 255] { 0 } else { 255 };
 		}
 		trns[0] = 0;
-		encoder.set_palette(std::borrow::Cow::Borrowed(palette.as_ref()));
+		encoder.set_palette(std::borrow::Cow::Borrowed(palette));
 		encoder.set_trns(trns.to_vec());
 	} else {
 		encoder.set_color(png::ColorType::Grayscale);
@@ -1658,7 +1862,7 @@ fn setup_png<'a>(
 }
 
 fn save_png(path: &Path, data: &[u8], width: u32, height: u32, palette: PalRef) {
-	let mut encoder = setup_png(path, width, height, &palette)
+	let mut encoder = setup_png(path, width, height, palette)
 		.write_header()
 		.unwrap();
 	encoder.write_image_data(data).unwrap();
@@ -2088,10 +2292,9 @@ fn main() {
 	for_all_ext("assets", "cmi", parse_cmi);
 
 	//for_all_ext("assets", "lbb", parse_lbb);
+	//for_all_ext("assets", "fti", parse_fti);
 	//for_all_ext("assets", "flc", parse_video);
 	//for_all_ext("assets", "mve", parse_video);
-
-	//for_all_ext("assets", "fti", parse_fti);
 
 	println!("done in {:.2?}", start_time.elapsed());
 }

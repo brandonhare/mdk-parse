@@ -81,6 +81,10 @@ impl<'buf> Reader<'buf> {
 		result
 	}
 
+	pub fn set_end(&mut self, end_pos: usize) {
+		self.resize_pos(0..end_pos, self.position());
+	}
+
 	pub fn buf(&self) -> &'buf [u8] {
 		self.reader.get_ref()
 	}

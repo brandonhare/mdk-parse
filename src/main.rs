@@ -361,16 +361,13 @@ fn parse_mti_data(output: &mut OutputWriter, buf: &[u8], pal: PalRef) {
 			let flags2 = flags & 0xFFFF;
 
 			if flags_mask != 0 {
-				num_frames = data.u32();
-				if flags_mask == 0x20000 {
-					num_frames = 1; // todo
-				}
+				num_frames = data.u32() as usize;
 			}
 			let width = data.u16() as u32;
 			let height = data.u16() as u32;
 
 			let frame_size = (width * height) as usize;
-			if num_frames == 1 {
+			if num_frames == 1 || flags_mask == 0x20000 {
 				let pixels = data.slice(frame_size);
 				output.write_png(name, pixels, width, height, pal);
 			} else {
@@ -387,6 +384,29 @@ fn parse_mti_data(output: &mut OutputWriter, buf: &[u8], pal: PalRef) {
 					})
 					.collect();
 				save_anim(name, &anims, output, pal);
+			}
+
+			if flags_mask == 0x20000 {
+				assert!(data.u32() == 0);
+				let mut data =
+					data.resized(data.position()..(data.position() + 7108).min(data.len()));
+				let offsets = data.get_vec::<u32>(num_frames * 2);
+				let metadata_offsets = &offsets[..num_frames];
+				let pixel_offsets = &offsets[num_frames..];
+				for (i, (&meta_offset, &pixel_offset)) in
+					metadata_offsets.iter().zip(pixel_offsets).enumerate()
+				{
+					data.set_position(meta_offset as usize);
+					let meta = data.slice(pixel_offset as usize - meta_offset as usize);
+					let next_meta_offset = metadata_offsets
+						.get(i + 1)
+						.map(|n| *n as usize)
+						.unwrap_or(data.len());
+					debug_assert_eq!(data.position(), pixel_offset as usize);
+					let pixels = data.slice(next_meta_offset - pixel_offset as usize);
+					output.write(&format!("{name}_{i}_meta"), "", meta);
+					output.write(&format!("{name}_{i}_pixels"), "", pixels);
+				}
 			}
 		}
 	}
@@ -464,6 +484,14 @@ fn set_pal(filename: &str, asset_name: &str, pal: &[u8]) -> Option<Rc<[u8]>> {
 					.copy_from_slice(pal);
 				result
 			} else {
+				/*let prev_count = 4 * 16 * 3;
+				Rc::from_iter(
+					std::iter::repeat(0)
+						.take(prev_count)
+						.chain(pal.iter().copied())
+						.chain(std::iter::repeat(0))
+						.take(256 * 3),
+				)*/
 				//println!("level pal not found for arena pal {level_name}/{asset_name}");
 				return None;
 			}
@@ -821,9 +849,13 @@ fn parse_mto(path: &Path) {
 			let pal_size = bsp_offset - pal_offset;
 			assert_eq!(pal_size, 336);
 			let pal_data = asset_reader.slice(pal_size);
-			set_pal(filename, arena_name, pal_data);
+			let pal_full = set_pal(filename, arena_name, pal_data);
 			output.set_output_path("PAL", "PNG");
 			save_pal(&output.path, pal_data);
+			if let Some(pal) = pal_full {
+				output.set_output_path("PAL_full", "PNG");
+				save_pal(&output.path, &pal);
+			}
 		}
 
 		{
@@ -2285,11 +2317,11 @@ fn main() {
 	let start_time = std::time::Instant::now();
 
 	for_all_ext("assets", "dti", parse_dti);
-	for_all_ext("assets", "bni", parse_bni);
+	//for_all_ext("assets", "bni", parse_bni);
 	for_all_ext("assets", "mto", parse_mto);
-	for_all_ext("assets", "sni", parse_sni);
-	for_all_ext("assets", "mti", parse_mti);
-	for_all_ext("assets", "cmi", parse_cmi);
+	//for_all_ext("assets", "sni", parse_sni);
+	//for_all_ext("assets", "mti", parse_mti);
+	//for_all_ext("assets", "cmi", parse_cmi);
 
 	//for_all_ext("assets", "lbb", parse_lbb);
 	//for_all_ext("assets", "fti", parse_fti);

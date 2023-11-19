@@ -1,6 +1,6 @@
 #![allow(dead_code)]
-#![allow(unused_variables, unused_assignments, unused_mut)] // todo check
-#![warn(trivial_casts, trivial_numeric_casts)]
+#![allow(unused_variables)] // todo check
+#![warn(trivial_casts, trivial_numeric_casts, future_incompatible)]
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -1089,7 +1089,7 @@ fn try_parse_alienanim<'a>(name: &str, mut data: Reader<'a>) -> Option<AlienAnim
 	// part locations ?
 	let frames_data = data.try_get_vec::<Vec3>(frames_data_count * num_frames)?;
 
-	let mut frames: Vec<AlienAnimFrame> = if frames_data_count * num_frames != 0 {
+	let frames: Vec<AlienAnimFrame> = if frames_data_count * num_frames != 0 {
 		frame_vectors
 			.iter()
 			.zip(frames_data.chunks_exact(frames_data_count))
@@ -1773,7 +1773,6 @@ fn parse_fti(path: &Path) {
 
 	let mut strings = String::new();
 	for (name, mut reader) in offsets {
-		let offset = reader.position();
 		match name {
 			"ARROW" => {
 				let anims = try_parse_anim(reader.clone());

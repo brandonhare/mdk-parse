@@ -269,7 +269,7 @@ pub fn parse_cmi(
 					}
 				}
 				0x04 => {
-					let mut code1 = reader.u8();
+					let code1 = reader.u8();
 					//let mut code2 = 0;
 					let mut branch = Default::default();
 					let mut f1 = 0.0;

@@ -1,7 +1,7 @@
 dti skybox reflection index, more params
 level6/olym_9 overlapping palette?
 fall3d.bni/zoom animation palette
-mesh and multimesh extras
-mto missing read ranges
+mesh reference points
+m_comm animated texture
 cmi missing read ranges
 animation format

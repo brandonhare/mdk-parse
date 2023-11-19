@@ -183,17 +183,6 @@ fn flag_var(reader: &mut Reader) -> FlagVar {
 	FlagVar { target, index }
 }
 
-fn read_path(reader: &Reader, offset: u32) -> Vec<crate::PathDataEntry> {
-	let mut reader = reader.clone_at(offset as usize);
-	let count = reader.u32();
-	(0..count)
-		.map(|_| {
-			let chunk: [u32; 10] = reader.get();
-			unsafe { std::mem::transmute(chunk) }
-		})
-		.collect()
-}
-
 fn get_anim_name<'a>(reader: &Reader<'a>, anim_offset: u32) -> Option<&'a str> {
 	let mut anim_reader = reader.clone_at(anim_offset as usize);
 	if anim_reader.u32() == 0 {
@@ -203,7 +192,15 @@ fn get_anim_name<'a>(reader: &Reader<'a>, anim_offset: u32) -> Option<&'a str> {
 	}
 }
 
-pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader, anims: &mut Vec<u32>) -> String {
+#[derive(Default)]
+pub struct CmiOffsets {
+	pub anim_offsets: Vec<u32>,
+	pub path_offsets: Vec<u32>,
+}
+
+pub fn parse_cmi(
+	filename: &str, name: &str, reader: &mut Reader, offsets: &mut CmiOffsets,
+) -> String {
 	let mut summary = format!("{filename}/{name}\n\n");
 
 	if reader.position() == 0 {
@@ -254,21 +251,21 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader, anims: &mut Ve
 				}
 				0x02 => {
 					let path_offset = reader.u32();
-					let path = read_path(reader, path_offset);
+					offsets.path_offsets.push(path_offset);
 					let value1 = reader.u8();
 					let value2 = reader.u8();
 					let value3 = reader.u16();
 					let rest = reader.u8();
 					let vec = if rest == 0 { reader.vec3() } else { [0.0; 3] };
-					wl!("Set path] v1: {value1}, v2: {value2}, v3: {value3}, rest: {rest}, vec: {vec:?}, path (offset {path_offset:X}): {path:?}");
+					wl!("Set path] v1: {value1}, v2: {value2}, v3: {value3}, rest: {rest}, vec: {vec:?}, path offset: {path_offset:06X}");
 				}
 				0x03 => {
 					let anim_offset = reader.u32();
 					if let Some(anim_name) = get_anim_name(reader, anim_offset) {
 						wl!("Set animation] name: {anim_name}");
 					} else {
-						anims.push(anim_offset);
-						wl!("Set animation] offset: {anim_offset:06X}");
+						offsets.anim_offsets.push(anim_offset);
+						wl!("Set animation] anim offset: {anim_offset:06X}");
 					}
 				}
 				0x04 => {
@@ -401,8 +398,8 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader, anims: &mut Ve
 				}
 				0x1C => {
 					let offset = reader.u32();
-					let path = read_path(reader, offset);
-					wl!("Mortar path] path (offset {offset:X}): {path:?}");
+					offsets.path_offsets.push(offset);
+					wl!("Mortar path] path offset: {offset:06X}");
 				}
 				0x1D => {
 					let value1 = reader.u8();
@@ -546,7 +543,7 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader, anims: &mut Ve
 					if let Some(anim_name) = get_anim_name(reader, anim_offset) {
 						wl!("Set anim] name: {anim_name}");
 					} else {
-						anims.push(anim_offset);
+						offsets.anim_offsets.push(anim_offset);
 						wl!("Set anim] anim offset: {anim_offset:06X}");
 					}
 				}
@@ -1087,13 +1084,13 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader, anims: &mut Ve
 					if let Some(name1) = get_anim_name(reader, anim_offset1) {
 						w!("{name1}, anim2: ");
 					} else {
-						anims.push(anim_offset1);
+						offsets.anim_offsets.push(anim_offset1);
 						w!("{anim_offset1:06X}, anim2: ");
 					}
 					if let Some(name2) = get_anim_name(reader, anim_offset2) {
 						wl!("{name2}");
 					} else {
-						anims.push(anim_offset2);
+						offsets.anim_offsets.push(anim_offset2);
 						wl!("{anim_offset2:06X}");
 					}
 				}
@@ -1473,11 +1470,11 @@ pub fn parse_cmi(filename: &str, name: &str, reader: &mut Reader, anims: &mut Ve
 				}
 				0xCE => {
 					let path_offset = reader.u32();
-					let path = read_path(reader, path_offset);
+					offsets.path_offsets.push(path_offset);
 					let length = reader.f32();
 					let name = reader.pascal_str();
 					let target = read_block(&mut blocks, reader);
-					wl!("Spawn aliens on path] name: {name}, spacing: {length}, init target: {target}, path (offset {path_offset:X}): {path:?}");
+					wl!("Spawn aliens on path] name: {name}, spacing: {length}, init target: {target}, path offset: {path_offset:06X}");
 				}
 				0xCF => {
 					let speed = reader.f32();

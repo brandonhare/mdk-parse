@@ -306,15 +306,6 @@ fn try_parse_anim(mut data: Reader) -> Option<Vec<Anim>> {
 	Some(results)
 }
 
-#[repr(C)]
-#[derive(Debug)]
-struct PathDataEntry {
-	t: i32,
-	pos1: Vec3,
-	pos2: Vec3,
-	pos3: Vec3,
-}
-
 fn parse_mti(path: &Path) {
 	let buf = read_file(path);
 
@@ -1497,6 +1488,31 @@ translucent colours: {translucent_colours:08x?}\n"
 	}
 }
 
+struct PathDataEntry {
+	t: i32,
+	pos1: Vec3,
+	pos2: Vec3,
+	pos3: Vec3,
+}
+
+fn read_path_data(mut reader: Reader) -> Vec<PathDataEntry> {
+	let count = reader.u32();
+	(0..count)
+		.map(|_| {
+			let t = reader.i32();
+			let pos1 = reader.vec3();
+			let pos2 = reader.vec3();
+			let pos3 = reader.vec3();
+			PathDataEntry {
+				t,
+				pos1,
+				pos2,
+				pos3,
+			}
+		})
+		.collect()
+}
+
 fn parse_cmi(path: &Path) {
 	let buf = read_file(path);
 	let filename = get_filename(path);
@@ -1536,15 +1552,15 @@ fn parse_cmi(path: &Path) {
 		}));
 	}
 
-	let output = OutputWriter::new(path);
+	let mut output = OutputWriter::new(path);
 
-	let mut anim_offsets = Vec::new();
+	let mut cmi_offsets = cmi_bytecode::CmiOffsets::default();
 
 	// process init entries
 	{
 		let mut init_output = None;
 		for (name, mut data) in init_entries {
-			let cmi = cmi_bytecode::parse_cmi(filename, name, &mut data, &mut anim_offsets);
+			let cmi = cmi_bytecode::parse_cmi(filename, name, &mut data, &mut cmi_offsets);
 			let init_output = init_output.get_or_insert_with(|| output.push_dir("init"));
 			init_output.write(name, "txt", cmi.as_bytes());
 		}
@@ -1580,7 +1596,7 @@ fn parse_cmi(path: &Path) {
 	{
 		let mut setup_output = output.push_dir("setup");
 		for (name, mut data) in setup_entries {
-			let cmi = cmi_bytecode::parse_cmi(filename, name, &mut data, &mut anim_offsets);
+			let cmi = cmi_bytecode::parse_cmi(filename, name, &mut data, &mut cmi_offsets);
 			setup_output.write(name, "txt", cmi.as_bytes());
 		}
 	}
@@ -1594,7 +1610,7 @@ fn parse_cmi(path: &Path) {
 			let offset = data.u32() as usize;
 
 			data.set_position(offset);
-			let cmi = cmi_bytecode::parse_cmi(filename, name, &mut data, &mut anim_offsets);
+			let cmi = cmi_bytecode::parse_cmi(filename, name, &mut data, &mut cmi_offsets);
 			arena_output.write(
 				name,
 				"txt",
@@ -1607,9 +1623,10 @@ fn parse_cmi(path: &Path) {
 	// save anims
 	{
 		let mut anim_output = output.push_dir("anims");
+		let anim_offsets = &mut cmi_offsets.anim_offsets;
 		anim_offsets.sort_unstable();
 		anim_offsets.dedup();
-		for offset in anim_offsets {
+		for &offset in anim_offsets.iter() {
 			let name = format!("{offset:06X}");
 			let anim_reader = data.resized(offset as usize..);
 			if let Some(anim) = try_parse_alienanim(&name, anim_reader) {
@@ -1618,6 +1635,31 @@ fn parse_cmi(path: &Path) {
 				eprintln!("{filename}/{name} failed to parse alienanim at offset {offset:06X}");
 			}
 		}
+	}
+	// save paths
+	{
+		let path_offsets = &mut cmi_offsets.path_offsets;
+		path_offsets.sort_unstable();
+		path_offsets.dedup();
+		let mut summary = String::new();
+		for &offset in path_offsets.iter() {
+			if offset == 0 {
+				eprintln!("invalid path offset in {filename}");
+				continue;
+			}
+			let path = read_path_data(data.clone_at(offset as usize));
+			writeln!(summary, "path {offset:06X} ({})", path.len()).unwrap();
+			for row in &path {
+				writeln!(
+					summary,
+					"\t[{:3}] {:?}, {:?}, {:?}",
+					row.t, row.pos1, row.pos2, row.pos3
+				)
+				.unwrap();
+			}
+			summary.push('\n');
+		}
+		output.write("paths", "txt", summary.as_bytes());
 	}
 }
 
@@ -2317,14 +2359,14 @@ fn main() {
 	let start_time = std::time::Instant::now();
 
 	for_all_ext("assets", "dti", parse_dti);
-	//for_all_ext("assets", "bni", parse_bni);
+	for_all_ext("assets", "bni", parse_bni);
 	for_all_ext("assets", "mto", parse_mto);
-	//for_all_ext("assets", "sni", parse_sni);
-	//for_all_ext("assets", "mti", parse_mti);
-	//for_all_ext("assets", "cmi", parse_cmi);
+	for_all_ext("assets", "sni", parse_sni);
+	for_all_ext("assets", "mti", parse_mti);
+	for_all_ext("assets", "cmi", parse_cmi);
 
-	//for_all_ext("assets", "lbb", parse_lbb);
-	//for_all_ext("assets", "fti", parse_fti);
+	for_all_ext("assets", "lbb", parse_lbb);
+	for_all_ext("assets", "fti", parse_fti);
 	//for_all_ext("assets", "flc", parse_video);
 	//for_all_ext("assets", "mve", parse_video);
 

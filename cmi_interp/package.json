@@ -1,0 +1,9 @@
+{
+  "name": "cmi_interp",
+  "private": true,
+  "main": "main.ts",
+  "scripts": {
+    "start": "ts-node .",
+    "watch": "nodemon"
+  }
+}

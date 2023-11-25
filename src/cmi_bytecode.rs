@@ -2,12 +2,46 @@ use crate::Reader;
 
 use std::fmt::Write;
 
+struct FlagNames<'a> {
+	names: &'a [(u32, &'a str)],
+	value: u32,
+}
+impl<'a> std::fmt::Display for FlagNames<'a> {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		let mut first = true;
+		let mut rest = self.value;
+		for &(mask, name) in self.names {
+			if self.value & mask == mask {
+				if first {
+					first = false;
+				} else {
+					f.write_char('|')?;
+				}
+				f.write_str(name)?;
+				rest &= !mask;
+			}
+		}
+		if rest != 0 {
+			if !first {
+				f.write_char('|')?;
+			}
+			f.write_fmt(format_args!("0x{rest:X}"))?;
+		}
+		f.write_fmt(format_args!(" (0x{:X})", self.value))
+	}
+}
+fn flag_names<'a>(names: &'a [(u32, &'a str)], value: u32) -> FlagNames<'a> {
+	FlagNames { names, value }
+}
+
 fn var_target(index: u8) -> &'static str {
 	match index {
 		0 => "Global",
 		1 => "Arena",
 		2 => "Entity",
 		3 => "Direct",
+		4 => "SomeDynamicThing",
+		5 => "Door",
 		n => format!("(Unknown {n})").leak(),
 	}
 }
@@ -129,17 +163,8 @@ impl std::fmt::Display for VarOrData {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		if self.target == 3 {
 			self.value.fmt(f)
-		//write!(f, "value: {}", self.value)
 		} else {
 			write!(f, "{}_vars[{}]", var_target(self.target), self.index)
-			/*
-			write!(
-				f,
-				"target: {}, index: {}",
-				var_target(self.target),
-				self.index
-			)
-			*/
 		}
 	}
 }
@@ -173,7 +198,25 @@ struct FlagVar {
 }
 impl std::fmt::Display for FlagVar {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		write!(f, "{}_flags[{}]", var_target(self.target), self.index)
+		let index = self.index & 31;
+
+		let value = 1u32 << index;
+		if self.target == 5 {
+			write!(
+				f,
+				"{}_flags[{}]",
+				var_target(self.target),
+				flag_names(DOOR_FLAG_NAMES, value)
+			)?;
+		} else {
+			write!(f, "{}_flags[0x{:X}]", var_target(self.target), value)?;
+		}
+
+		if self.index != index {
+			write!(f, " (index clipped: {})", self.index)
+		} else {
+			Ok(())
+		}
 	}
 }
 fn flag_var(reader: &mut Reader) -> FlagVar {
@@ -182,6 +225,18 @@ fn flag_var(reader: &mut Reader) -> FlagVar {
 	//assert_eq!(index & !31, 0, "flag value out of range");
 	FlagVar { target, index }
 }
+
+static DOOR_FLAG_NAMES: &[(u32, &str)] = &[
+	(0x1, "OPEN"),
+	(0x2, "OPENING"),
+	(0x4, "CLOSING"),
+	(0x8, "CLOSED"),
+	(0x10, "HIDE_WHEN_OPEN"),
+	(0x20, "STAY_OPEN"),
+	(0x40, "LOCKED"),
+	(0x80, "JUST_NUKED"),
+	(0x100, "HIDE_LOCK"),
+];
 
 fn get_anim_name<'a>(reader: &Reader<'a>, anim_offset: u32) -> Option<&'a str> {
 	let mut anim_reader = reader.clone_at(anim_offset as usize);
@@ -247,7 +302,7 @@ pub fn parse_cmi(
 					break;
 				}
 				0x01 => {
-					wl!("Save bytecode?]");
+					wl!("Set script resume point]");
 				}
 				0x02 => {
 					let path_offset = reader.u32();
@@ -270,30 +325,38 @@ pub fn parse_cmi(
 				}
 				0x04 => {
 					let code1 = reader.u8();
-					//let mut code2 = 0;
-					let mut branch = Default::default();
-					let mut f1 = 0.0;
-					let mut f2 = 0.0;
+					w!("Give order] code1: {code1}");
 					if code1 == 7 {
-						branch = branch_code(&mut blocks, reader);
+						let branch = branch_code(&mut blocks, reader);
+						w!(", target: {}", branch.target1);
+						if branch.target2.offset != 0 {
+							w!(" (target2: {})", branch.target2);
+						}
+						if branch.code == 0xFC {
+							w!(" (code1 now: 0xFC)");
+						}
 					} else if code1 == 0x2b {
-						f1 = reader.f32();
-						f2 = reader.f32();
+						let dir = reader.vec2();
+						w!(", direction: {dir:?}");
 					}
-					let code3 = reader.u8();
-					let mut f3 = 0.0;
-					if code3 == 6 || code3 == 10 {
-						f3 = reader.f32();
+
+					let code2 = reader.u8();
+					w!(", code2: {code2}");
+
+					if code2 == 6 || code2 == 10 {
+						let value = reader.f32();
+						w!(", value: {value}");
 					}
-					let mut name = "";
-					if matches!(code3, 2 | 7 | 4 | 5 | 6 | 10) {
-						name = reader.pascal_str();
+					if matches!(code2, 2 | 7 | 4 | 5 | 6 | 10) {
+						let name = reader.pascal_str();
+						w!(", name: {name}");
 					}
-					let mut num1 = 0;
-					if code3 == 5 {
-						num1 = reader.u32();
+					if code2 == 5 {
+						let value = reader.u32();
+						w!(", value: {value}");
 					}
-					wl!("Give order] code1: {code1}, {branch}, f1: {f1}, f2: {f2}, code3: {code3}, f3: {f3}, name: {name}, num1: {num1}");
+
+					wl!();
 				}
 				0x05 => {
 					let value = reader.f32();
@@ -536,7 +599,7 @@ pub fn parse_cmi(
 				}
 				0x3A => {
 					let var_data = var_or_data(reader);
-					wl!("Set entity someCmiField3] {var_data}");
+					wl!("Set anim framerate] framerate: {var_data}");
 				}
 				0x3B => {
 					let anim_offset = reader.u32();
@@ -616,7 +679,7 @@ pub fn parse_cmi(
 				}
 				0x49 => {
 					let value = reader.u8();
-					wl!("Set someDataField2] value: {value}");
+					wl!("Set some order byte 2] value: {value}");
 				}
 				0x4A => {
 					let value1 = reader.u8();
@@ -771,10 +834,10 @@ pub fn parse_cmi(
 					wl!("]");
 				}
 				0x60 => {
-					let pos = reader.vec3();
-					let radius = reader.f32();
+					let min_pos = reader.vec2();
+					let max_pos = reader.vec2();
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Trigger (sphere)] pos: {pos:?}, radius: {radius}, {branch}");
+					wl!("Branch on player in square] min XY: {min_pos:?}, max XY: {max_pos:?}, {branch}");
 				}
 				0x61 => {
 					let on = reader.u8();
@@ -1071,13 +1134,13 @@ pub fn parse_cmi(
 					let object_name = reader.pascal_str();
 					let arena_name = reader.pascal_str();
 					let init_target = read_block(&mut blocks, reader);
-					wl!("Spawn Door] name: {object_name}, arena: {arena_name}, pos: {position:?}, angle: {angle}, arena_index: {arena_index}, init target: {init_target}");
+					wl!("Spawn Door] pos: {position:?}, angle: {angle}, arena index: {arena_index}, name: {object_name}, arena: {arena_name}, init target: {init_target}");
 				}
 				0x96 => {
 					let anim_offset1 = reader.u32();
 					let anim_offset2 = reader.u32();
 
-					w!("Set anims] anim1: ");
+					w!("Set door anims] anim1: ");
 					//offset: {anim_offset1:06X}");
 					// (name: {name1:?}), anim2 offset: {anim_offset2:06X} (name: {name2:?})");
 
@@ -1095,23 +1158,26 @@ pub fn parse_cmi(
 					}
 				}
 				0x97 => {
-					let str1 = reader.pascal_str();
-					let str2 = reader.pascal_str();
-					let str3 = reader.pascal_str();
-					let str4 = reader.pascal_str();
-					wl!("Set door? properties] names: [\"{str1}\", \"{str2}\", \"{str3}\", \"{str4}\"]");
+					let open_sound = reader.pascal_str();
+					let close_sound = reader.pascal_str();
+					let open_finish_sound = reader.pascal_str();
+					let close_finish_sound = reader.pascal_str();
+					wl!("Set door sounds] open: \"{open_sound}\", close: \"{close_sound}\", open finish: \"{open_finish_sound}\", close finish: \"{close_finish_sound}\"");
 				}
 				0x98 => {
 					let flag = reader.u32();
-					wl!("Set entity cmiFlag2] flag: {flag:X}");
+					wl!(
+						"Set door flags] flags: {}",
+						flag_names(DOOR_FLAG_NAMES, flag)
+					);
 				}
 				0x99 => {
 					let value = reader.f32();
-					wl!("Set entity someDataField (float)] value: {value}");
+					wl!("Set door open distance] distance: {value}");
 				}
 				0x9A => {
 					let value = reader.i16();
-					wl!("Check some anim thing] value: {value}");
+					wl!("Wait for anim progress] value: {value}");
 				}
 				0x9B => {
 					let value = var_or_data(reader);
@@ -1263,7 +1329,7 @@ pub fn parse_cmi(
 				}
 				0xB1 => {
 					let value = var_or_data(reader);
-					wl!("Set someCmiField1] value = {value}");
+					wl!("Set some damage radius] value = {value}");
 				}
 				0xB2 => {
 					let value1 = reader.u8();

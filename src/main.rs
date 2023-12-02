@@ -975,18 +975,18 @@ struct Multimesh<'a> {
 struct BspPlane {
 	normal: Vec3,
 	dist: f32,
-	plane_index_a: i16,
-	plane_index_b: i16,
-	a: u16,
-	tri_index: u16,
-	b: i32,
+	plane_index_behind: i16,
+	plane_index_front: i16,
+	tris_front_count: u16,
+	tris_front_index: u16,
+	tris_back_count: u16,
+	tris_back_index: u16,
 	zeroes: [u32; 4],
 }
 
 struct Bsp<'a> {
 	planes: Vec<BspPlane>,
 	mesh: Mesh<'a>,
-	num_last: u32,
 }
 
 fn try_parse_bsp<'a>(data: &mut Reader<'a>) -> Option<Bsp<'a>> {
@@ -994,7 +994,7 @@ fn try_parse_bsp<'a>(data: &mut Reader<'a>) -> Option<Bsp<'a>> {
 	if num_materials > 500 {
 		return None;
 	}
-	let material_names = (0..num_materials)
+	let textures = (0..num_materials)
 		.map(|_| data.try_str(10))
 		.collect::<Option<Vec<&str>>>()?;
 	data.try_align(4)?;
@@ -1008,17 +1008,18 @@ fn try_parse_bsp<'a>(data: &mut Reader<'a>) -> Option<Bsp<'a>> {
 		let result = BspPlane {
 			normal: data.try_vec3()?,
 			dist: data.try_f32()?,
-			plane_index_a: data.try_i16()?,
-			plane_index_b: data.try_i16()?,
-			a: data.try_u16()?,
-			tri_index: data.try_u16()?,
-			b: data.try_i32()?,
+			plane_index_behind: data.try_i16()?,
+			plane_index_front: data.try_i16()?,
+			tris_front_count: data.try_u16()?,
+			tris_front_index: data.try_u16()?,
+			tris_back_count: data.try_u16()?,
+			tris_back_index: data.try_u16()?,
 			zeroes: data.try_get()?,
 		};
-		if result.plane_index_a < -1
-			|| result.plane_index_a as isize > num_planes as isize
-			|| result.plane_index_b < -1
-			|| result.plane_index_b as isize > num_planes as isize
+		if result.plane_index_behind < -1
+			|| result.plane_index_behind as isize > num_planes as isize
+			|| result.plane_index_front < -1
+			|| result.plane_index_front as isize > num_planes as isize
 		{
 			return None;
 		}
@@ -1042,12 +1043,12 @@ fn try_parse_bsp<'a>(data: &mut Reader<'a>) -> Option<Bsp<'a>> {
 	let mut verts = data.try_get_vec::<Vec3>(num_verts)?;
 	swizzle_slice(&mut verts);
 
-	let num_last = data.try_u32()?;
-	if num_last > 10000 {
+	let num_things = data.try_u32()?;
+	if num_things > 10000 {
 		return None;
 	}
-	let last_things = data.try_slice(num_last as usize)?;
-	if last_things.iter().any(|c| *c != 255) {
+	let things = data.try_slice(num_things as usize)?;
+	if things.iter().any(|c| *c != 255) {
 		return None;
 	}
 	//assert_eq!(data.position(), data.len());
@@ -1055,13 +1056,12 @@ fn try_parse_bsp<'a>(data: &mut Reader<'a>) -> Option<Bsp<'a>> {
 	Some(Bsp {
 		planes,
 		mesh: Mesh {
-			textures: material_names,
+			textures,
 			bbox: get_bbox(&verts),
 			verts,
 			tris,
 			reference_points: Vec::new(),
 		},
-		num_last,
 	})
 }
 
@@ -1920,6 +1920,62 @@ fn save_anim(name: &str, anims: &[Anim], fps: u16, output: &mut OutputWriter, pa
 	encoder.finish().expect("failed to write png file");
 }
 
+fn save_bsp_debug(name: &str, bsp: &Bsp, output: &mut OutputWriter) {
+	let mut gltf = gltf::Gltf::new(name.to_owned());
+
+	fn recurse(
+		gltf: &mut gltf::Gltf, temp_mesh: &mut Mesh, bsp: &Bsp, index: usize, node: gltf::NodeIndex,
+	) {
+		let plane = &bsp.planes[index];
+
+		let front_index = plane.plane_index_front;
+		if front_index >= 0 {
+			let right_node = gltf.create_child_node(node, format!("front_{front_index}"), None);
+			recurse(gltf, temp_mesh, bsp, front_index as usize, right_node);
+		}
+
+		temp_mesh.tris.clear();
+		for i in 0..plane.tris_front_count {
+			let tri = &bsp.mesh.tris[(plane.tris_front_index + i) as usize];
+			if tri.indices[0] == tri.indices[1] && tri.indices[0] == tri.indices[2] {
+				continue;
+			}
+			temp_mesh.tris.push(tri.clone());
+		}
+		for i in 0..plane.tris_back_count {
+			let tri = &bsp.mesh.tris[(plane.tris_back_index + i) as usize];
+			if tri.indices[0] == tri.indices[1] && tri.indices[0] == tri.indices[2] {
+				continue;
+			}
+			temp_mesh.tris.push(tri.clone());
+		}
+
+		if !temp_mesh.tris.is_empty() {
+			let mesh_node = gltf.create_child_node(node, format!("mesh_{index}"), None);
+			add_mesh_to_gltf(gltf, format!("{index}"), temp_mesh, &[], Some(mesh_node));
+
+			let extras = serde_json::json!({"flags":temp_mesh.tris.iter().map(|t|serde_json::json!({"id": t.id(), "flags":t.flags & 0xF_FFFF})).collect::<Vec<_>>()});
+			gltf.set_node_extras(mesh_node, extras);
+		}
+
+		let behind_index = plane.plane_index_behind;
+		if behind_index >= 0 {
+			let left_node = gltf.create_child_node(node, format!("behind_{behind_index}"), None);
+			recurse(gltf, temp_mesh, bsp, behind_index as usize, left_node);
+		}
+	}
+
+	let node = gltf.get_root_node();
+	recurse(&mut gltf, &mut bsp.mesh.clone(), bsp, 0, node);
+
+	gltf.combine_buffers();
+	output.write(
+		name,
+		"debug.gltf",
+		serde_json::to_string(&gltf).unwrap().as_bytes(),
+	);
+}
+
 fn save_bsp(name: &str, bsp: &Bsp, output: &mut OutputWriter) {
 	let mut gltf = gltf::Gltf::new(name.to_owned());
 	let root = gltf.get_root_node();
@@ -1931,6 +1987,8 @@ fn save_bsp(name: &str, bsp: &Bsp, output: &mut OutputWriter) {
 		"gltf",
 		serde_json::to_string(&gltf).unwrap().as_bytes(),
 	);
+
+	//save_bsp_debug(name, bsp, output);
 }
 
 fn setup_png<'a>(
@@ -1982,12 +2040,27 @@ type Vec2 = [f32; 2];
 type Vec3 = [f32; 3];
 
 #[derive(Clone)]
-#[repr(C)]
 struct MeshTri {
 	indices: [u16; 3],
 	texture: i16,
 	uvs: [Vec2; 3],
-	flags: u32, // todo what are these
+	flags: u32,
+}
+impl MeshTri {
+	fn id(&self) -> u8 {
+		(self.flags >> 24) as u8
+	}
+	fn outlines(&self) -> Option<[bool; 3]> {
+		if self.flags & 0x800000 != 0 {
+			Some([
+				self.flags & 0x100000 != 0,
+				self.flags & 0x200000 != 0,
+				self.flags & 0x400000 != 0,
+			])
+		} else {
+			None
+		}
+	}
 }
 
 #[derive(Default, Clone)]
@@ -2026,12 +2099,13 @@ fn try_parse_mesh_tris(data: &mut Reader, count: usize) -> Option<Vec<MeshTri>> 
 	for _ in 0..count {
 		let indices = data.try_get()?;
 		let texture = data.try_i16()?;
-		if !(-5000..=200).contains(&texture) {
+		if texture > 256 {
 			return None;
 		}
 		let uvs = data.try_get_unvalidated()?;
 
 		let flags = data.try_u32()?;
+
 		result.push(MeshTri {
 			indices,
 			texture,
@@ -2211,6 +2285,21 @@ fn add_mesh_to_gltf(
 		let indices = &tri.indices;
 		let uvs = &tri.uvs;
 
+		if tri.flags & 2 != 0 {
+			// start hidden
+			continue;
+		}
+		if indices[0] == indices[1] && indices[0] == indices[2] {
+			// fully degenerate
+			continue;
+		}
+		if tri.outlines().is_none()
+			&& (indices[0] == indices[1] || indices[1] == indices[2] || indices[0] == indices[2])
+		{
+			// partially degenerate
+			continue;
+		} // else might be a line
+
 		for i in (0..3).rev() {
 			let index = tri.indices[i];
 			let mut uv = tri.uvs[i];
@@ -2232,6 +2321,11 @@ fn add_mesh_to_gltf(
 
 			split_mesh.indices.push(new_index);
 		}
+	}
+
+	primitives.retain(|prim| !prim.indices.is_empty());
+	if primitives.is_empty() && mesh.reference_points.is_empty() {
+		return target.unwrap_or_else(|| gltf.create_node(name.to_owned(), None));
 	}
 
 	let mesh_index = gltf.create_mesh(name.to_owned());
@@ -2356,7 +2450,6 @@ fn parse_video(path: &Path) {
 	let mut output_path = OutputWriter::get_output_path(path);
 	output_path.set_extension("mp4");
 	let _ = std::fs::create_dir_all(output_path.with_file_name(""));
-	println!("converting {}", path.display());
 	let result = std::process::Command::new("ffmpeg")
 		.args(["-y", "-loglevel", "error", "-i"])
 		.args([path, &output_path])

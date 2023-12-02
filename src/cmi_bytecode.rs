@@ -46,6 +46,18 @@ fn var_target(index: u8) -> &'static str {
 	}
 }
 
+fn tri_visflag(flag: u8) -> &'static str {
+	static TRI_VISFLAGS: &[&str] = &[
+		"HIDE_AND_NOCLIP",
+		"SHOW_AND_COLLIDE",
+		"HIDE",
+		"SHOW",
+		"NOCLIP",
+		"COlLIDE",
+	];
+	TRI_VISFLAGS[flag as usize]
+}
+
 fn push_block(blocks: &mut Vec<u32>, offset: u32) -> BlockInfo {
 	if offset == 0 {
 		return BlockInfo { index: 0, offset };
@@ -846,7 +858,10 @@ pub fn parse_cmi(
 				0x62 => {
 					let triangle_id = reader.u8();
 					let visflag = reader.u8();
-					wl!("Set Triangle Visibility] id: {triangle_id}, visflag: {visflag}");
+					wl!(
+						"Set Triangle Visibility] id: {triangle_id}, visflag: {}",
+						tri_visflag(visflag)
+					);
 				}
 				0x63 => {
 					let trigger_index = (reader.i8() - 1) % 16;
@@ -1472,10 +1487,10 @@ pub fn parse_cmi(
 					}
 				}
 				0xC2 => {
-					let a = reader.u8();
+					let visflag = tri_visflag(reader.u8());
 					let id = reader.u8();
 					let vs: [u8; 3] = reader.get();
-					wl!("Do something with bsp vis] id: {id}, a: {a}, vs: {vs:?}");
+					wl!("Do something with bsp vis] id: {id}, visflag: {visflag}, vs: {vs:?}");
 				}
 				0xC3 => {
 					let value = reader.i8();

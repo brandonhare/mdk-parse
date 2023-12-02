@@ -1,9 +1,7 @@
 use serde::{Serialize, Serializer};
 use std::mem;
 
-fn swizzle(pos: &[f32; 3]) -> [f32; 3] {
-	[pos[0], pos[2], -pos[1]]
-}
+use crate::{Vec2, Vec3};
 
 #[derive(Serialize)]
 struct Asset {
@@ -71,8 +69,8 @@ struct Image {
 	name: String,
 }
 
-const FILTER_NEAREST: isize = 9728;
-//const FILTER_LINEAR: isize = 9729;
+//const FILTER_NEAREST: isize = 9728;
+const FILTER_LINEAR: isize = 9729;
 //const WRAP_CLAMP: isize = 33071;
 const WRAP_REPEAT: isize = 10497;
 #[derive(Serialize)]
@@ -86,8 +84,8 @@ struct Sampler {
 impl Default for Sampler {
 	fn default() -> Self {
 		Self {
-			mag_filter: FILTER_NEAREST,
-			min_filter: FILTER_NEAREST,
+			mag_filter: FILTER_LINEAR,
+			min_filter: FILTER_LINEAR,
 			wrap_s: WRAP_REPEAT,
 			wrap_t: WRAP_REPEAT,
 		}
@@ -102,8 +100,6 @@ struct Accessor {
 	count: usize,
 	#[serde(rename = "type")]
 	element_type: &'static str,
-	#[serde(skip)]
-	usage: PrimitiveUsage,
 	min: Vec<f64>,
 	max: Vec<f64>,
 }
@@ -155,26 +151,29 @@ struct Node {
 	translation: Option<[f32; 3]>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	children: Vec<NodeIndex>,
+
+	#[serde(skip)]
+	parent: Option<NodeIndex>,
 }
 
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
+pub struct NodeIndex(usize);
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
+#[must_use]
 pub struct MeshIndex(usize);
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 pub struct MaterialIndex(usize);
-#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
-pub struct PrimitiveIndex(usize);
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 struct BufferIndex(usize);
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 struct BufferViewIndex(usize);
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
+#[must_use]
 pub struct AccessorIndex(usize);
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 struct ImageIndex(usize);
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 struct TextureIndex(usize);
-#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
-struct NodeIndex(usize);
 
 #[derive(Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -200,34 +199,46 @@ pub struct Gltf {
 	buffers: Vec<Buffer>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	buffer_views: Vec<BufferView>,
-}
 
-pub enum PrimitiveUsage {
-	Indices,
-	Positions,
-	UVs,
+	#[serde(skip)]
+	debug_cube: Option<MeshIndex>,
 }
 
 impl Gltf {
 	pub fn new(name: String) -> Self {
-		let mut result = Self::default();
-		result.scenes[0].name = name.clone();
-		result.nodes.push(Node {
-			name,
-			mesh: None,
-			translation: None,
-			children: Vec::new(),
-		});
-		result
+		Gltf {
+			scenes: [Scene {
+				name: name.clone(),
+				nodes: [NodeIndex(0)],
+			}],
+			nodes: vec![Node {
+				name,
+				mesh: None,
+				translation: None,
+				children: Vec::new(),
+				parent: None,
+			}],
+			..Default::default()
+		}
 	}
-	pub fn add_colour(&mut self, name: String, colour: [f32; 4]) -> MaterialIndex {
+
+	pub fn get_root_node(&self) -> NodeIndex {
+		NodeIndex(0)
+	}
+
+	#[must_use]
+	pub fn create_colour_material(&mut self, name: String, colour: [f32; 4]) -> MaterialIndex {
 		self.materials.push(Material {
 			name,
 			pbr_metallic_roughness: PbrMetallicRoughness::BaseColorFactor(colour),
 		});
 		MaterialIndex(self.materials.len() - 1)
 	}
-	pub fn add_texture(&mut self, name: String, relative_filename: String) -> MaterialIndex {
+
+	#[must_use]
+	pub fn create_texture_material_ref(
+		&mut self, name: String, relative_filename: String,
+	) -> MaterialIndex {
 		let image_index = ImageIndex(self.images.len());
 		self.images.push(Image {
 			name: name.clone(),
@@ -241,7 +252,7 @@ impl Gltf {
 		});
 
 		if self.samplers.is_empty() {
-			self.samplers.resize_with(1, Default::default);
+			self.samplers.push(Default::default());
 		}
 
 		let material_index = MaterialIndex(self.materials.len());
@@ -254,20 +265,62 @@ impl Gltf {
 		material_index
 	}
 
-	pub fn add_positions(&mut self, data: &[[f32; 3]]) -> AccessorIndex {
-		self.add_data(
-			&data.iter().map(swizzle).collect::<Vec<[f32; 3]>>(),
-			PrimitiveUsage::Positions,
-		)
+	#[must_use]
+	pub fn create_node(&mut self, name: String, mesh: Option<MeshIndex>) -> NodeIndex {
+		let result = NodeIndex(self.nodes.len());
+		self.nodes.push(Node {
+			name,
+			mesh,
+			translation: None,
+			children: Vec::new(),
+			parent: None,
+		});
+		result
 	}
-	pub fn add_uvs(&mut self, data: &[[f32; 2]]) -> AccessorIndex {
-		self.add_data(data, PrimitiveUsage::UVs)
+	pub fn create_child_node(
+		&mut self, parent: NodeIndex, name: String, mesh: Option<MeshIndex>,
+	) -> NodeIndex {
+		let child_node = self.create_node(name, mesh);
+		self.set_node_parent(parent, child_node);
+		child_node
 	}
-	pub fn add_indices(&mut self, data: &[u16]) -> AccessorIndex {
-		self.add_data(data, PrimitiveUsage::Indices)
+	pub fn set_node_parent(&mut self, parent: NodeIndex, child: NodeIndex) {
+		let node = &mut self.nodes[child.0];
+		if let Some(parent_index) = node.parent.replace(parent) {
+			let old_parent_children = &mut self.nodes[parent_index.0].children;
+			let index = old_parent_children
+				.iter()
+				.position(|&i| i == child)
+				.expect("invalid node setup!");
+			old_parent_children.remove(index);
+		}
+		self.nodes[parent.0].children.push(child);
 	}
-	pub fn add_data<T: BufferData>(&mut self, data: &[T], usage: PrimitiveUsage) -> AccessorIndex {
-		if matches!(usage, PrimitiveUsage::Indices) {
+	pub fn set_node_mesh(&mut self, node: NodeIndex, mesh: MeshIndex) {
+		self.nodes[node.0].mesh = Some(mesh);
+	}
+	pub fn set_node_position(&mut self, node: NodeIndex, position: Vec3) {
+		self.nodes[node.0].translation = Some(position);
+	}
+	pub fn get_node_mesh(&self, node: NodeIndex) -> Option<MeshIndex> {
+		self.nodes[node.0].mesh
+	}
+
+	pub fn create_base_node(&mut self, name: String, mesh: Option<MeshIndex>) -> NodeIndex {
+		self.create_child_node(self.get_root_node(), name, mesh)
+	}
+
+	pub fn create_mesh(&mut self, name: String) -> MeshIndex {
+		let mesh = MeshIndex(self.meshes.len());
+		self.meshes.push(Mesh {
+			name,
+			primitives: Vec::new(),
+		});
+		mesh
+	}
+
+	fn add_primitive_data<T: BufferData>(&mut self, data: &[T], indices: bool) -> AccessorIndex {
+		if indices {
 			assert!(T::NUM_COMPONENTS == 1, "indices must be flat!");
 		}
 
@@ -279,9 +332,10 @@ impl Gltf {
 			byte_length: data_u8.len(),
 		});
 
-		let target = match usage {
-			PrimitiveUsage::Indices => 34963, // ELEMENT_ARRAY_BUFFER
-			_ => 34962,                       // ARRAY_BUFFER
+		let target = if indices {
+			34963 // ELEMENT_ARRAY_BUFFER
+		} else {
+			34962 // ARRAY_BUFFER
 		};
 		let view_index = BufferViewIndex(self.buffer_views.len());
 		self.buffer_views.push(BufferView {
@@ -295,7 +349,6 @@ impl Gltf {
 
 		let accessor_index = AccessorIndex(self.accessors.len());
 		self.accessors.push(Accessor {
-			usage,
 			buffer_view: view_index,
 			component_type: T::COMPONENT_TYPE,
 			count: data.len(),
@@ -307,62 +360,41 @@ impl Gltf {
 		accessor_index
 	}
 
-	pub fn add_mesh(&mut self, name: String) -> MeshIndex {
-		let mesh = MeshIndex(self.meshes.len());
-		self.meshes.push(Mesh {
-			primitives: Vec::new(),
-			name: name.clone(),
-		});
-		let node_index = NodeIndex(self.nodes.len());
-		self.nodes[0].children.push(node_index);
-		self.nodes.push(Node {
-			mesh: Some(mesh),
-			name,
-			translation: None,
-			children: Vec::new(),
-		});
-
-		assert_eq!(self.meshes.len() + 1, self.nodes.len());
-		mesh
+	fn add_positions(&mut self, data: &[[f32; 3]]) -> AccessorIndex {
+		self.add_primitive_data(data, false)
 	}
-
-	pub fn set_mesh_position(&mut self, mesh: MeshIndex, position: [f32; 3]) {
-		self.nodes[mesh.0 + 1].translation = Some(swizzle(&position));
+	fn add_uvs(&mut self, data: &[[f32; 2]]) -> AccessorIndex {
+		self.add_primitive_data(data, false)
 	}
-
-	pub fn add_mesh_simple(
-		&mut self, name: String, data: &[AccessorIndex], material: Option<MaterialIndex>,
-	) -> MeshIndex {
-		let mesh = self.add_mesh(name);
-		self.add_mesh_primitive(mesh, data, material);
-		mesh
+	fn add_indices(&mut self, data: &[u16]) -> AccessorIndex {
+		self.add_primitive_data(data, true)
 	}
 
 	pub fn add_mesh_primitive(
-		&mut self, mesh: MeshIndex, data: &[AccessorIndex], material: Option<MaterialIndex>,
-	) -> PrimitiveIndex {
-		let mut indices = None;
-		let mut positions = None;
-		let mut texcoord_0 = None;
-		for prim in data {
-			match self.accessors[prim.0].usage {
-				PrimitiveUsage::Indices => indices = Some(*prim),
-				PrimitiveUsage::Positions => positions = Some(*prim),
-				PrimitiveUsage::UVs => texcoord_0 = Some(*prim),
-			}
-		}
+		&mut self, mesh: MeshIndex, positions: &[Vec3], indices: &[u16], uvs: Option<&[Vec2]>,
+		material: Option<MaterialIndex>,
+	) {
+		let position = self.add_positions(positions);
+		let indices = self.add_indices(indices);
+		let texcoord_0 = material.and_then(|_| uvs.map(|uvs| self.add_uvs(uvs)));
 
-		let mesh = &mut self.meshes[mesh.0];
-		let prim_index = PrimitiveIndex(mesh.primitives.len());
-		mesh.primitives.push(Primitive {
+		self.meshes[mesh.0].primitives.push(Primitive {
 			attributes: Attributes {
-				position: positions.expect("missing positions primitives!"),
+				position,
 				texcoord_0,
 			},
-			indices: indices.expect("missing indices primitives!"),
+			indices,
 			material,
 		});
-		prim_index
+	}
+
+	pub fn create_mesh_from_primitive(
+		&mut self, name: String, positions: &[Vec3], indices: &[u16], uvs: Option<&[Vec2]>,
+		material: Option<MaterialIndex>,
+	) -> MeshIndex {
+		let mesh = self.create_mesh(name);
+		self.add_mesh_primitive(mesh, positions, indices, uvs, material);
+		mesh
 	}
 
 	pub fn combine_buffers(&mut self) {
@@ -392,28 +424,42 @@ impl Gltf {
 		self.buffers.truncate(1);
 	}
 
-	pub fn add_debug_points<'a>(&mut self, name: &str, points: impl Iterator<Item = &'a [f32; 3]>) {
-		let mut points = points.peekable();
-
-		if points.peek().is_none() {
-			return;
-		}
+	fn get_debug_cube(&mut self) -> MeshIndex {
+		if let Some(result) = self.debug_cube {
+			return result;
+		};
 
 		let (cube_verts, cube_indices) = make_cube(0.5);
-		let debug_mesh_primitives = [
-			self.add_positions(&cube_verts),
-			self.add_indices(&cube_indices),
-		];
-		let debug_mesh_material = self.add_colour("Debug".to_owned(), [1.0, 0.0, 1.0, 1.0]);
+		let cube_material = self.create_colour_material("Debug".to_owned(), [1.0, 0.0, 1.0, 1.0]);
 
-		for (i, point) in points.enumerate() {
-			let mesh = self.add_mesh_simple(
-				format!("{name} {i}"),
-				&debug_mesh_primitives,
-				Some(debug_mesh_material),
-			);
-			self.set_mesh_position(mesh, *point);
+		let result = self.create_mesh_from_primitive(
+			"Cube".to_owned(),
+			&cube_verts,
+			&cube_indices,
+			None,
+			Some(cube_material),
+		);
+		self.debug_cube = Some(result);
+		result
+	}
+
+	pub fn create_points_nodes(
+		&mut self, name: String, points: &[Vec3], parent: Option<NodeIndex>,
+	) -> NodeIndex {
+		let cube = self.get_debug_cube();
+
+		let container = self.create_node(name, None);
+
+		for (i, &point) in points.iter().enumerate() {
+			let node = self.create_child_node(container, format!("{i}"), Some(cube));
+			self.set_node_position(node, point);
 		}
+
+		if let Some(parent) = parent {
+			self.set_node_parent(parent, container);
+		}
+
+		container
 	}
 }
 
@@ -429,8 +475,12 @@ const fn make_unit_cube() -> ([[f32; 3]; 8], [u16; 36]) {
 		[0.5, 0.5, 0.5],
 	];
 	let indices = [
-		0, 2, 1, 1, 2, 3, 4, 5, 6, 6, 5, 7, 0, 1, 4, 4, 1, 5, 2, 6, 3, 3, 6, 7, 0, 2, 4, 4, 2, 6,
-		1, 5, 3, 3, 5, 7,
+		0, 1, 2, 2, 1, 3, // -x
+		0, 4, 1, 1, 4, 5, // -y
+		0, 2, 4, 4, 2, 6, // -z
+		4, 6, 5, 5, 6, 7, // +x
+		2, 3, 6, 6, 3, 7, // +y
+		1, 5, 3, 3, 5, 7, // +z
 	];
 	(points, indices)
 }

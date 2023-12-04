@@ -129,25 +129,33 @@ fn branch_code(blocks: &mut Vec<u32>, reader: &mut Reader) -> BranchInfo {
 	}
 }
 
-struct CompInfo {
+struct CompValue;
+impl std::fmt::Display for CompValue {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.write_str("value")
+	}
+}
+struct CompInfo<T = CompValue> {
 	comp: u8,
 	value2: f32,
 	value3: f32,
+	value: T,
 }
-impl std::fmt::Display for CompInfo {
+impl<T: std::fmt::Display> std::fmt::Display for CompInfo<T> {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		let value = &self.value;
 		let value2 = self.value2;
 		let value3 = self.value3;
 		match self.comp {
-			1 | 3 => write!(f, "comp: (value < {value2})"),
-			2 | 4 => write!(f, "comp: ({value2} < value)"),
-			5 => write!(f, "comp: (value == {value2})"),
-			6 => write!(f, "comp: (value == {value2})"),
-			7 => write!(f, "comp: ({value2} <= value <= {value3})"),
-			8 => write!(f, "comp: ({value2} </= value </= {value3})"),
+			1 | 3 => write!(f, "({value} < {value2})"),
+			2 | 4 => write!(f, "({value2} < {value})"),
+			5 => write!(f, "({value} == {value2})"),
+			6 => write!(f, "({value} == {value2})"),
+			7 => write!(f, "({value2} <= {value} <= {value3})"),
+			8 => write!(f, "({value2} </= {value} </= {value3})"),
 			n => write!(
 				f,
-				"comp: (unknown: {n}, value2: {value2}, value3: {value3})"
+				"(unknown: {n}, value: {value}, value2: {value2}, value3: {value3})"
 			),
 		}
 	}
@@ -163,6 +171,16 @@ fn compare(reader: &mut Reader) -> CompInfo {
 		comp,
 		value2,
 		value3,
+		value: CompValue,
+	}
+}
+fn compare_with<T: std::fmt::Display>(reader: &mut Reader, value: T) -> CompInfo<T> {
+	let comp = compare(reader);
+	CompInfo {
+		comp: comp.comp,
+		value2: comp.value2,
+		value3: comp.value3,
+		value,
 	}
 }
 
@@ -336,36 +354,60 @@ pub fn parse_cmi(
 					}
 				}
 				0x04 => {
-					let code1 = reader.u8();
-					w!("Give order] code1: {code1}");
-					if code1 == 7 {
+					let order_code = reader.u8();
+					w!("Give order] ");
+					if order_code == 7 {
 						let branch = branch_code(&mut blocks, reader);
-						w!(", target: {}", branch.target1);
+						w!("{branch}");
 						if branch.target2.offset != 0 {
-							w!(" (target2: {})", branch.target2);
+							w!(" (target 2: {})", branch.target2);
 						}
-						if branch.code == 0xFC {
-							w!(" (code1 now: 0xFC)");
-						}
-					} else if code1 == 0x2b {
+					} else if order_code == 0x2b {
 						let dir = reader.vec2();
-						w!(", direction: {dir:?}");
+						w!("Set home (dir: {dir:?})");
+					} else if order_code == 1 {
+						w!("Set some home thing");
+					} else {
+						w!("Unknown! (code: {order_code})");
 					}
 
-					let code2 = reader.u8();
-					w!(", code2: {code2}");
+					w!(", Target: ");
 
-					if code2 == 6 || code2 == 10 {
+					let order_target = reader.u8();
+					if order_target == 6 || order_target == 10 {
 						let value = reader.f32();
-						w!(", value: {value}");
+						if order_target == 6 {
+							w!("Visible (distance: {value})");
+						} else {
+							w!("Height (min y: {value})");
+						}
+					} else if order_target == 3 {
+						w!("Everyone");
 					}
-					if matches!(code2, 2 | 7 | 4 | 5 | 6 | 10) {
-						let name = reader.pascal_str();
-						w!(", name: {name}");
+
+					let name = match order_target {
+						2 | 4 | 5 | 6 | 7 | 10 => Some(reader.pascal_str()),
+						_ => None,
+					};
+
+					match order_target {
+						2 => w!("Normal"),
+						3 => (),
+						4 => w!("Single"),
+						5 => {
+							let value = reader.u32();
+							w!("ID={value}");
+						}
+						6 => (),
+						7 => w!("Children"),
+						8 => w!("Children"),
+						9 => w!("Buddy"),
+						10 => (),
+						n => w!("Unknown (target: {n})"),
 					}
-					if code2 == 5 {
-						let value = reader.u32();
-						w!(", value: {value}");
+
+					if let Some(name) = name {
+						w!(", Name: {name}");
 					}
 
 					wl!();
@@ -396,12 +438,15 @@ pub fn parse_cmi(
 				}
 				0x0C => {
 					let count = reader.u8();
-					w!("Random jump] targets:");
-					for _ in 0..count {
+					w!("Random jump] targets: [");
+					for i in 0..count {
 						let block = read_block(&mut blocks, reader);
-						w!(" {}", block);
+						if i != 0 {
+							w!(", ");
+						}
+						w!("{}", block);
 					}
-					wl!();
+					wl!("]");
 				}
 				0x0D => {
 					let branch = branch_code(&mut blocks, reader);
@@ -531,7 +576,7 @@ pub fn parse_cmi(
 				0x26 => {
 					let comp = compare(reader);
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Branch on vertical velocity] {comp}, {branch}");
+					wl!("Branch on vertical velocity] if {comp} {branch}");
 				}
 				0x27 => {
 					let var_data = var_or_data(reader);
@@ -564,7 +609,7 @@ pub fn parse_cmi(
 				0x2D => {
 					let comp = compare(reader);
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Branch on distance to player] {comp} {branch}");
+					wl!("Branch on distance to player] if {comp} {branch}");
 				}
 				0x2E => {
 					let branch = branch_code(&mut blocks, reader);
@@ -593,7 +638,7 @@ pub fn parse_cmi(
 				0x36 => {
 					let comp = compare(reader);
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Branch on distance to something] {comp}, {branch}");
+					wl!("Branch on distance to something] if {comp} {branch}");
 				}
 				0x37 => {
 					let var_data = var_or_data(reader);
@@ -645,7 +690,7 @@ pub fn parse_cmi(
 				0x3E => {
 					let comp = compare(reader);
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Branch on angle to player] {comp}, {branch}");
+					wl!("Branch on angle to player] if {comp} {branch}");
 				}
 				0x3F => {
 					let set = reader.u8() == 0;
@@ -667,9 +712,9 @@ pub fn parse_cmi(
 				}
 				0x43 => {
 					let var = simple_var(reader);
-					let comp = compare(reader);
+					let comp = compare_with(reader, var);
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Branch on variable compare] {var}, {comp}, {branch}");
+					wl!("Branch on variable compare] if {comp} {branch}");
 				}
 				0x44 => {
 					let flag = flag_var(reader);
@@ -915,7 +960,7 @@ pub fn parse_cmi(
 				}
 				0x6F => {
 					let index = reader.i32();
-					wl!("Set arena index] index: {index}");
+					wl!("Set entity ID] ID: {index}");
 				}
 				0x70 => {
 					let name = reader.pascal_str();
@@ -960,7 +1005,7 @@ pub fn parse_cmi(
 					let name = reader.pascal_str();
 					let comp = compare(reader);
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Find entity and branch on comparison] name: {name}, {comp}, {branch}");
+					wl!("Find entity and branch on comparison] name: {name}, if {comp} {branch}");
 				}
 				0x78 => {
 					let angle = reader.f32();
@@ -1246,7 +1291,7 @@ pub fn parse_cmi(
 				0xA0 => {
 					let comp = compare(reader);
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Branch on yaw] {comp}, {branch}");
+					wl!("Branch on yaw] if {comp} {branch}");
 				}
 				0xA1 => {
 					let position = reader.vec3();
@@ -1263,7 +1308,7 @@ pub fn parse_cmi(
 					let thing_index = (reader.u8() - 1) % 16;
 					let comp = compare(reader);
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Branch arena thing index comparison] thing index: {thing_index}, {comp}, {branch}");
+					wl!("Branch arena thing index comparison] thing index: {thing_index}, if {comp} {branch}");
 				}
 				0xA4 => {
 					let code = reader.u8();
@@ -1330,7 +1375,7 @@ pub fn parse_cmi(
 					let pickup_index = reader.u8();
 					let comp = compare(reader);
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Some pickup comparison branch 1?] pickup index: {pickup_index}, {comp}, {branch}");
+					wl!("Some pickup comparison branch 1?] pickup index: {pickup_index}, if {comp} {branch}");
 				}
 				0xAF => {
 					let pickup_type = reader.u8();
@@ -1418,7 +1463,7 @@ pub fn parse_cmi(
 				0xB9 => {
 					let comp = compare(reader);
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Branch on someCmiDataValues0] {comp}, {branch}");
+					wl!("Branch on someCmiDataValues0] if {comp} {branch}");
 				}
 				0xBA => {
 					let a = reader.u8();
@@ -1433,7 +1478,7 @@ pub fn parse_cmi(
 				0xBC => {
 					let comp = compare(reader);
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Branch on distance to player] {comp} {branch}");
+					wl!("Branch on distance to player] if {comp} {branch}");
 				}
 				0xBD => {
 					let value1 = reader.u8();
@@ -1464,9 +1509,9 @@ pub fn parse_cmi(
 					let index = index & !0x80;
 					if index < 3 {
 						let index = (b'x' + index) as char;
-						wl!("Branch on axis distance to player] index: {index} (abs: {abs}), {comp}, {branch}");
+						wl!("Branch on axis distance to player] index: {index} (abs: {abs}), if {comp} {branch}");
 					} else {
-						wl!("Branch on axis distance to player] index: {index} (abs: {abs}), {comp}, {branch}");
+						wl!("Branch on axis distance to player] index: {index} (abs: {abs}), if {comp} {branch}");
 					}
 				}
 				0xC0 => {
@@ -1586,12 +1631,12 @@ pub fn parse_cmi(
 				0xD5 => {
 					let comp = compare(reader);
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Branch on distance to thing] {comp}, {branch}");
+					wl!("Branch on distance to thing] if {comp} {branch}");
 				}
 				0xD6 => {
 					let comp = compare(reader);
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Branch on angle to thing] {comp}, {branch}");
+					wl!("Branch on angle to thing] if {comp} {branch}");
 				}
 				0xD7 => {
 					let value = var_or_data(reader);
@@ -1600,7 +1645,7 @@ pub fn parse_cmi(
 				0xD8 => {
 					let var = simple_var(reader);
 					let value = reader.f32();
-					wl!("Add var with delta] {var} += {value} * dt");
+					wl!("Add var] {var} += {value} * dt");
 				}
 				0xD9 => {
 					let code = reader.u8();
@@ -1629,7 +1674,7 @@ pub fn parse_cmi(
 				0xDE => {
 					let comp = compare(reader);
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Branch on instruction count] {comp}, {branch}");
+					wl!("Branch on instruction count] if {comp} {branch}");
 				}
 				0xDF => {
 					let name = reader.pascal_str();
@@ -1695,7 +1740,7 @@ pub fn parse_cmi(
 				0xEA => {
 					let comp = compare(reader);
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Branch on angle to player] {comp}, {branch}");
+					wl!("Branch on angle to player] if {comp} {branch}");
 				}
 				0xEB => {
 					let nums = reader.vec4();
@@ -1719,7 +1764,7 @@ pub fn parse_cmi(
 					};
 					let comp = compare(reader);
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Branch on position component] component: {component}, {comp}, {branch}");
+					wl!("Branch on position component] component: {component}, if {comp} {branch}");
 				}
 				0xEF => {
 					let min = reader.vec3();
@@ -1733,7 +1778,7 @@ pub fn parse_cmi(
 				0xF1 => {
 					let comp = compare(reader);
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Branch on some global pickup data] {comp}, {branch}");
+					wl!("Branch on some global pickup data] if {comp} {branch}");
 				}
 				0xF2 => {
 					let has_matrix = reader.u8() != 0;

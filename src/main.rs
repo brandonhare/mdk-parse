@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 mod cmi_bytecode;
+mod dti;
 mod gltf;
 mod reader;
 use reader::Reader;
@@ -68,6 +69,10 @@ impl OutputWriter {
 			height,
 			palette,
 		)
+	}
+
+	fn write_palette(&mut self, asset_name: &str, pixels: &[u8]) {
+		save_pal(self.set_output_path(asset_name, "png"), pixels)
 	}
 }
 
@@ -137,6 +142,30 @@ fn read_file(path: &Path) -> DataFile {
 	}
 
 	DataFile(path, data)
+}
+
+#[derive(Default)]
+pub struct NoDebug<T>(T);
+impl<T> From<T> for NoDebug<T> {
+	fn from(value: T) -> Self {
+		Self(value)
+	}
+}
+impl<T> std::fmt::Debug for NoDebug<T> {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.write_str("...")
+	}
+}
+impl<T> std::ops::Deref for NoDebug<T> {
+	type Target = T;
+	fn deref(&self) -> &Self::Target {
+		&self.0
+	}
+}
+impl<T> std::ops::DerefMut for NoDebug<T> {
+	fn deref_mut(&mut self) -> &mut Self::Target {
+		&mut self.0
+	}
 }
 
 fn swizzle(pos: Vec3) -> Vec3 {
@@ -1292,229 +1321,6 @@ fn parse_lbb(path: &Path) {
 	assert!(success);
 }
 
-fn parse_dti(path: &Path) {
-	let buf = read_file(path);
-	let filename = get_filename(path);
-	let mut data = Reader::new(&buf);
-	let filesize = data.u32() + 4;
-	assert_eq!(data.len() as u32, filesize, "filesize does not match");
-	data.resize(4..);
-
-	let data_file_name = data.str(12);
-	let filesize2 = data.u32();
-	assert_eq!(filesize, filesize2 + 12);
-
-	let mut output = OutputWriter::new(path);
-
-	let offsets = data.get::<[u32; 5]>();
-
-	let get_range = |i: usize| {
-		let next = offsets
-			.get(i + 1)
-			.map(|o| *o as usize)
-			.unwrap_or(data.len());
-		data.resized_pos(..next, offsets[i] as usize)
-	};
-
-	// data1 (arena and skybox data?)
-	let mut info_str;
-	let sky_info: [i32; 8];
-	{
-		let mut data = get_range(0);
-		let arena_index = data.u32();
-		assert_eq!(arena_index, 0);
-		let player_start_pos = data.vec3();
-		let player_start_angle = data.f32();
-		sky_info = data.get::<[i32; 8]>();
-		let translucent_colours = data
-			.get::<[[i32; 4]; 4]>()
-			.map(|c| u32::from_be_bytes(c.map(|n| n as u8)));
-		assert!(data.remaining_len() == 0);
-
-		info_str = format!(
-			"start pos: {player_start_pos:?}, start angle: {player_start_angle}\n\
-skybox: {sky_info:3?}\n\
-translucent colours: {translucent_colours:08x?}\n"
-		);
-	}
-
-	// data2  (teleport locations?)
-	{
-		let mut data = get_range(1);
-		let count = data.u32();
-		let mut things = Vec::with_capacity(count as usize);
-		for i in 0..count {
-			things.push((data.get::<[i32; 2]>(), data.vec3(), data.f32()));
-			assert_eq!(things.last().unwrap().0[0], (i as i32 + 1) % 10);
-		}
-		assert_eq!(data.remaining_len(), 0);
-
-		// todo what are these
-
-		info_str.push_str("\nTeleport locations?:\n");
-		info_str.extend(things.iter().map(|([a, arena_index], pos, angle)| {
-			format!("{a} {arena_index:2}, {pos:7?} {angle}\n")
-		}));
-		output.write("info", "txt", info_str.as_bytes());
-	}
-
-	// entities (connnects? arena locations?)
-	let mut bsp_entities_str = String::new();
-	{
-		let mut entities_data = get_range(2);
-
-		let num_arenas = entities_data.u32();
-		let mut arena_offsets = Vec::with_capacity(num_arenas as usize);
-		for _ in 0..num_arenas {
-			let name = entities_data.str(8);
-			let offset = entities_data.u32();
-			let num = entities_data.f32();
-			arena_offsets.push((name, offset, num));
-		}
-
-		for (arena_index, &(name, offset, num)) in arena_offsets.iter().enumerate() {
-			let mut data = entities_data.resized(
-				offset as usize
-					..(arena_offsets
-						.get(arena_index + 1)
-						.map(|(_, next, _)| *next as usize)
-						.unwrap_or(entities_data.len())),
-			);
-
-			writeln!(bsp_entities_str, "{name}, {num}").unwrap();
-
-			let num_entities = data.u32();
-			for _ in 0..num_entities {
-				let entity_type = data.i32();
-				let arena_index = data.i32();
-				let c = data.i32();
-				let pos = data.vec3();
-				write!(
-					bsp_entities_str,
-					"{entity_type},{arena_index:4},{c}, {pos:7?}, "
-				)
-				.unwrap();
-
-				if entity_type == 2 || entity_type == 4 {
-					let rest = data.str(12);
-					writeln!(bsp_entities_str, "{rest}").unwrap();
-				} else {
-					let rest = data.vec3();
-					writeln!(bsp_entities_str, "{rest:7?}").unwrap();
-				}
-			}
-			assert_eq!(data.remaining_len(), 0);
-
-			bsp_entities_str.push('\n');
-		}
-	}
-	output.write("bsp_entities", "txt", bsp_entities_str.as_bytes());
-
-	// pal
-	let pal = {
-		let mut pal_data = get_range(3);
-		let pal_free_rows = pal_data.u32();
-		let pixels = pal_data.slice(0x300);
-		assert_eq!(pal_data.remaining_len(), 0);
-		assert!(pal_free_rows % 16 == 0);
-		output.set_output_path("PAL", "png");
-		save_pal(&output.path, pixels);
-		set_pal(filename, filename.split_once('.').unwrap().0, pixels)
-	};
-
-	// skybox
-	{
-		let mut skybox_data = get_range(4);
-
-		let [sky_top_colour, sky_floor_colour, sky_y, sky_x, sky_width, sky_height, sky_reflected_top_colour, sky_reflected_bottom_colour] =
-			sky_info;
-
-		let has_reflection = sky_reflected_top_colour >= 0;
-
-		let src_height = sky_height as usize;
-		let dest_width = sky_width as usize + 4;
-		let (dest_height, src_width) = if has_reflection {
-			assert!(src_height & 1 == 0);
-			(src_height / 2, dest_width * 2)
-		} else {
-			(src_height, dest_width)
-		};
-
-		let skybox_pixels = skybox_data.slice(src_width * src_height);
-
-		let filename_footer = skybox_data.slice(12);
-		assert_eq!(skybox_data.remaining_len(), 0);
-
-		let mut full_height = dest_height;
-
-		let mut pixels = Vec::new();
-		if !has_reflection {
-			pixels.extend(std::iter::repeat(sky_top_colour as u8).take(src_width * 64));
-			pixels.extend_from_slice(skybox_pixels);
-			pixels.extend(std::iter::repeat(sky_floor_colour as u8).take(src_width * 64));
-			full_height += 128;
-		} else {
-			let size = dest_width * dest_height;
-			assert_eq!(size * 4, skybox_pixels.len());
-
-			let (top, bottom) = skybox_pixels.split_at(src_width * dest_height);
-
-			pixels.extend(std::iter::repeat(sky_top_colour as u8).take(dest_width * 64));
-			pixels.extend(
-				top.chunks(dest_width)
-					.step_by(2)
-					.take(dest_height)
-					.flatten(),
-			);
-			pixels.extend(std::iter::repeat(sky_floor_colour as u8).take(dest_width * 64));
-
-			pixels.extend(std::iter::repeat(sky_top_colour as u8).take(dest_width * 64));
-			pixels.extend(
-				top.chunks(dest_width)
-					.skip(1)
-					.step_by(2)
-					.take(dest_height)
-					.flatten(),
-			);
-			pixels.extend(std::iter::repeat(sky_floor_colour as u8).take(dest_width * 64));
-
-			pixels.extend(std::iter::repeat(sky_reflected_top_colour as u8).take(dest_width * 64));
-			pixels.extend(
-				bottom
-					.chunks(dest_width)
-					.skip(1)
-					.step_by(2)
-					.take(dest_height)
-					.flatten(),
-			);
-			pixels
-				.extend(std::iter::repeat(sky_reflected_bottom_colour as u8).take(dest_width * 64));
-			pixels.extend(std::iter::repeat(sky_reflected_top_colour as u8).take(dest_width * 64));
-			pixels.extend(
-				bottom
-					.chunks(dest_width)
-					.skip(1)
-					.step_by(2)
-					.take(dest_height)
-					.flatten(),
-			);
-			pixels
-				.extend(std::iter::repeat(sky_reflected_bottom_colour as u8).take(dest_width * 64));
-
-			full_height *= 4;
-			full_height += 64 * 8;
-		}
-
-		output.write_png(
-			"skybox",
-			&pixels,
-			dest_width as u32,
-			full_height as u32,
-			pal.as_deref(),
-		);
-	}
-}
-
 struct PathDataEntry {
 	t: i32,
 	pos1: Vec3,
@@ -2509,13 +2315,17 @@ fn for_all_ext(path: impl AsRef<Path>, ext: &str, func: fn(&Path)) {
 	}
 }
 
+fn parse_and_save_dti(path: &Path) {
+	dti::Dti::parse(&read_file(path).1).save(&mut OutputWriter::new(path));
+}
+
 fn main() {
 	#[cfg(feature = "readranges")]
 	println!("Read ranges enabled");
 
 	let start_time = std::time::Instant::now();
 
-	for_all_ext("assets", "dti", parse_dti);
+	for_all_ext("assets", "dti", parse_and_save_dti);
 	for_all_ext("assets", "bni", parse_bni);
 	for_all_ext("assets", "mto", parse_mto);
 	for_all_ext("assets", "sni", parse_sni);

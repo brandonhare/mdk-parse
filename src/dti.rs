@@ -2,17 +2,17 @@ use crate::{NoDebug, OutputWriter, Reader, Vec3};
 
 #[derive(Default, Debug)]
 pub struct Dti<'a> {
-	filename: &'a str,
+	pub filename: &'a str,
 
-	player_start_pos: Vec3,
-	player_start_angle: f32,
-	sky: SkyInfo<'a>,
-	translucent_colours: [[u8; 4]; 4],
+	pub player_start_pos: Vec3,
+	pub player_start_angle: f32,
+	pub sky: SkyInfo<'a>,
+	pub translucent_colours: [[u8; 4]; 4],
 
-	arenas: Vec<DtiArena<'a>>,
+	pub arenas: Vec<DtiArena<'a>>,
 
-	num_pal_free_pixels: u32,
-	pal: NoDebug<&'a [u8]>,
+	pub num_pal_free_pixels: u32,
+	pub pal: &'a [u8],
 }
 
 #[derive(Default, Debug)]
@@ -201,7 +201,7 @@ impl<'a> Dti<'a> {
 		{
 			data.set_position(pal_offset);
 			result.num_pal_free_pixels = data.u32();
-			result.pal = data.slice(0x300).into();
+			result.pal = data.slice(0x300);
 
 			assert_eq!(result.num_pal_free_pixels % 16, 0);
 			assert_eq!(data.position(), skybox_offset);

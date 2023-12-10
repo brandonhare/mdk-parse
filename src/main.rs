@@ -2316,7 +2316,11 @@ fn for_all_ext(path: impl AsRef<Path>, ext: &str, func: fn(&Path)) {
 }
 
 fn parse_and_save_dti(path: &Path) {
-	dti::Dti::parse(&read_file(path).1).save(&mut OutputWriter::new(path));
+	let filename = get_filename(path);
+	let file = read_file(path);
+	let data = dti::Dti::parse(&file.1);
+	set_pal(filename, filename.split_once('.').unwrap().0, data.pal);
+	data.save(&mut OutputWriter::new(path));
 }
 
 fn main() {

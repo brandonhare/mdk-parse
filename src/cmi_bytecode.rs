@@ -433,8 +433,8 @@ pub fn parse_cmi(
 					wl!("Branch if alien with name at index] name: {name}, index: {index}, {branch}");
 				}
 				0x0B => {
-					let code = reader.u8();
-					wl!("Set some command byte] {code}");
+					let value = reader.u8();
+					wl!("Set min order range] {value}");
 				}
 				0x0C => {
 					let count = reader.u8();
@@ -736,7 +736,7 @@ pub fn parse_cmi(
 				}
 				0x49 => {
 					let value = reader.u8();
-					wl!("Set some order byte 2] value: {value}");
+					wl!("Set max order range] value: {value}");
 				}
 				0x4A => {
 					let value1 = reader.u8();
@@ -1197,25 +1197,21 @@ pub fn parse_cmi(
 					wl!("Spawn Door] pos: {position:?}, angle: {angle}, id: {id}, name: {object_name}, arena: {arena_name}, init target: {init_target}");
 				}
 				0x96 => {
-					// todo which do these correspond to?
-					let anim_offset1 = reader.u32();
-					let anim_offset2 = reader.u32();
+					let open_anim_offset = reader.u32();
+					let close_anim_offset = reader.u32();
 
-					w!("Set door anims] anim1: ");
-					//offset: {anim_offset1:06X}");
-					// (name: {name1:?}), anim2 offset: {anim_offset2:06X} (name: {name2:?})");
-
-					if let Some(name1) = get_anim_name(reader, anim_offset1) {
-						w!("{name1}, anim2: ");
+					w!("Set door anims] open: ");
+					if let Some(open_name) = get_anim_name(reader, open_anim_offset) {
+						w!("{open_name}, close: ");
 					} else {
-						offsets.anim_offsets.push(anim_offset1);
-						w!("{anim_offset1:06X}, anim2: ");
+						offsets.anim_offsets.push(open_anim_offset);
+						w!("{open_anim_offset:06X}, close: ");
 					}
-					if let Some(name2) = get_anim_name(reader, anim_offset2) {
-						wl!("{name2}");
+					if let Some(close_name) = get_anim_name(reader, close_anim_offset) {
+						wl!("{close_name}");
 					} else {
-						offsets.anim_offsets.push(anim_offset2);
-						wl!("{anim_offset2:06X}");
+						offsets.anim_offsets.push(close_anim_offset);
+						wl!("{close_anim_offset:06X}");
 					}
 				}
 				0x97 => {

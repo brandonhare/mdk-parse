@@ -65,7 +65,7 @@ for (let level_num = 3; level_num <= 8; ++level_num) {
 
 		const seenCount = new Map<string, number>();
 		for (const entity of [arena, ...arena.entities]) {
-			let name = entity.name + '_' + entity.id;
+			let name = (entity === arena) ? entity.name : entity.name + '_' + entity.id;
 
 			if (counts.get(name)! > 1) {
 				const count = seenCount.get(name) ?? 1;

@@ -1,9 +1,7 @@
 {
   "name": "cmi_interp",
   "private": true,
-  "main": "main.ts",
-  "scripts": {
-    "start": "ts-node .",
-    "watch": "nodemon"
+  "devDependencies": {
+    "@types/node": "^20.10.3"
   }
 }

@@ -1,14 +1,16 @@
 
-function assert<T>(condition: T, message = ""): asserts condition {
+function assert<T>(condition: T, message = "assert failed"): asserts condition {
 	if (!condition)
 		throw new Error("assert failed: " + message);
 }
-function assertExists<T>(value: T) {
-	assert(!!value, "value does not exist!");
+function assertExists<T>(value: T, message = "value does not exist") {
+	assert(!!value, message);
 	return value;
 }
 
-class Reader {
+export type vec3 = [number, number, number];
+
+export class Reader {
 	data: DataView;
 	offset: number;
 
@@ -55,7 +57,7 @@ class Reader {
 		this.offset += 4;
 		return result;
 	}
-	vec3(): [number, number, number] {
+	vec3(): vec3 {
 		const x = this.data.getFloat32(this.offset, true);
 		const y = this.data.getFloat32(this.offset + 4, true);
 		const z = this.data.getFloat32(this.offset + 8, true);
@@ -87,481 +89,300 @@ class Reader {
 
 class Entity {
 	name: string;
-	callstack: Reader[];
+	id: number;
+	position: vec3;
+	yawAngle = 0;
+	health = 100; // todo find default
 
-	constructor(name: string, reader?: Reader) {
+	arena: Arena;
+	script: Reader | null = null;
+	callstack: number[] = [];
+
+	log: string[] = [];
+
+	constructor(name: string, id: number, parent: Arena, position: vec3 = [0, 0, 0], yawAngle = 0) {
 		this.name = name;
-		this.callstack = (reader?.offset) ? [reader] : [];
+		this.id = id;
+		this.arena = parent;
+		this.position = position;
+		this.yawAngle = yawAngle;
+
+		this.log.push(`Name: ${name}, id: ${id}, position: ${position}, angle: ${yawAngle}`);
+	}
+
+	setScriptOffset(offset: number) {
+		if (!offset) {
+			this.script = null;
+		} else if (this.script) {
+			this.script.offset = offset;
+		} else {
+			this.script = this.arena.data.clone(offset);
+		}
+	}
+
+	executeScript() {
+		const script = this.script;
+		if (!script)
+			return;
+		while (true) {
+			if (!executeOpcode(this, script)) {
+				break;
+			}
+		}
 	}
 };
+
 class Arena extends Entity {
+	level: Level;
+	data: Reader;
+	setupOffsets = new Map<string, number>();
 	entities: Entity[] = [];
-	entity_setup_templates: Entity[] = [];
+
+	constructor(name: string, id: number, level: Level, data: Reader) {
+		super(name, id, null!);
+		this.arena = this;
+		if (data.offset)
+			this.script = data;
+
+		this.level = level;
+		this.data = data;
+	}
+
+	spawnEntity(entity: Entity, scriptOffset: number) {
+		this.entities.push(entity);
+		const setupOffset = this.setupOffsets.get(entity.name);
+		if (setupOffset) {
+			entity.setScriptOffset(setupOffset);
+			entity.executeScript();
+		}
+		entity.setScriptOffset(scriptOffset);
+	}
+
+	runScripts() {
+		for (const entity of this.entities) {
+			entity.executeScript();
+		}
+		this.executeScript();
+	}
 };
-interface Level {
+class Level {
 	name: string;
-	arenas: Map<string, Arena>;
+	arenas = new Map<string, Arena>();
+
+	constructor(name: string) { this.name = name; }
+
+	runScripts() {
+		this.arenas.forEach(arena => arena.runScripts());
+	}
 };
 
-export function go(buffer: DataView) {
+
+function readOffsets(data: Reader) {
+	const count = data.u32();
+	const result = new Map<string, number>();
+	for (let i = 0; i < count; ++i) {
+		const name = data.pstr();
+		const offset = data.u32();
+		result.set(name, offset);
+	}
+	return result;
+}
+
+export type BspEntity = {
+	arenaName: string,
+	name: string,
+	id: number,
+	position: vec3,
+	value: number,
+};
+
+export function go(buffer: DataView, entities: BspEntity[]) {
 	const data = new Reader(buffer);
-	const level_name = data.str(12);
-	data.skip(4);
+	const levelName = data.str(12);
+	data.skip(4); // filesize
 
-	function read_offsets() {
-		const num_offsets = data.u32();
-		const result = new Array<[string, number]>(num_offsets);
-		for (let i = 0; i < num_offsets; ++i) {
-			const name = data.pstr();
-			const offset = data.u32();
-			result[i] = [name, offset];
-		}
-		return result;
-	}
+	const initOffsets = readOffsets(data);
+	const meshOffsets = readOffsets(data);
+	const setupOffsets = readOffsets(data);
+	const arenaOffsets = readOffsets(data);
 
-	const init_offsets = read_offsets();
-	const mesh_offsets = read_offsets();
-	const setup_offsets = read_offsets();
-	const arena_offsets = read_offsets();
+	const level = new Level(levelName);
 
-	const level: Level = {
-		name: level_name,
-		arenas: new Map()
-	};
-
-	for (const arena of arena_offsets) {
-		const name = arena[0];
-		const offset = arena[1];
-
-		const bytecode = data.clone(offset);
-		const m1 = bytecode.pstr();
-		const m2 = bytecode.pstr();
-		bytecode.offset = bytecode.u32();
-
-		level.arenas.set(name, new Arena(name, bytecode));
-	}
-	for (const init of init_offsets) {
-		const [arena_name, entity_name] = init[0].split('$');
-		const offset = init[1];
-
-		const arena = level.arenas.get(arena_name)!;
-		arena.entities.push(new Entity(entity_name, data.clone(offset)));
-	}
-	for (const setup of setup_offsets) {
-		const [arena_name, entity_name] = setup[0].split('$');
-		const offset = setup[1];
-
-		const arena = level.arenas.get(arena_name)!;
-		arena.entity_setup_templates.push(new Entity(entity_name, data.clone(offset)));
-	}
-
-	level.arenas.forEach(arena => {
-		for (const entity of arena.entities) {
-			run_bytecode(level, arena, entity);
-		}
-		for (const entity of arena.entity_setup_templates) {
-			run_bytecode(level, arena, entity);
-		}
-
-		run_bytecode(level, arena, arena);
-
-		for (const entity of arena.entities) {
-			run_bytecode(level, arena, entity);
-		}
+	const arenas = arenaOffsets as Map<string, any> as Map<string, Arena>;
+	level.arenas = arenas;
+	let arenaIndex = 0;
+	arenaOffsets.forEach((offset, name) => {
+		data.offset = offset;
+		data.pstr();
+		data.pstr();
+		const scriptOffset = data.u32();
+		const arena = new Arena(name, arenaIndex++, level, data.clone(scriptOffset));
+		arenas.set(name, arena);
 	});
+
+	setupOffsets.forEach((offset, name) => {
+		const [arenaName, entityName] = name.split('$');
+		const arena = assertExists(arenas.get(arenaName));
+		arena.setupOffsets.set(entityName, offset);
+	});
+
+	for (const entityDef of entities) {
+		const arena = assertExists(arenas.get(entityDef.arenaName));
+		const initOffset = initOffsets.get(`${entityDef.arenaName}$${entityDef.name}_${entityDef.id}`) ?? 0;
+
+		const entity = new Entity(entityDef.name, entityDef.id, arena, entityDef.position);
+		arena.spawnEntity(entity, initOffset);
+	}
+
+	level.runScripts();
+	level.runScripts();
 
 	return level;
 }
 
-const temp: OpcodeBase[] = [];
+class PickupEntity extends Entity {}
+class DoorEntity extends Entity {
+	targetArena: Arena;
+	doorFlags: DoorFlags = DoorFlags.CLOSED; // todo check default
+	openDistance = 100; // todo find default
 
-function run_bytecode(level: Level, arena: Arena, entity: Entity) {
-
-	if (entity.callstack.length === 0)
-		return;
-
-	console.log(`running ${level.name} ${arena.name} ${entity.name}`);
-
-	let loopcount = 10000;
-	while (entity.callstack.length > 0) {
-		assert(entity.callstack.length < 1000, "stack overflow");
-
-		const data = entity.callstack[entity.callstack.length - 1];
-		while (true) {
-			assert(loopcount--, "infinite loop");
-
-			const opcode = data.u8();
-			if (opcode === 0xFF) {
-				console.log("finished executing");
-				if (entity.callstack.length !== 1) {
-					console.warn("callstack not empty!");
-				}
-				entity.callstack.length = 0;
-				return;
-			}
-
-			let thing = opcodes[opcode];
-			assert(thing !== null, "invalid opcode " + opcode);
-			if (thing === 0xFF) {
-				// done
-				if (entity.callstack.length > 1)
-					console.warn("finished executing but callstack remains!");
-				entity.callstack.length = 0;
-				return;
-			} else if (thing instanceof Todo) {
-				// todo
-				entity.callstack.length = 0;
-				return;
-			}
-
-
-			if (!Array.isArray(thing)) {
-				temp.length = 1;
-				temp[0] = thing;
-				thing = temp;
-			}
-
-			for (const code of thing) {
-				if (typeof (code) === "number") {
-					data.skip(code);
-					continue;
-				}
-				switch (code) {
-					case 'p': {
-						data.pstr();
-						break;
-					}
-					case 'b': {
-						const c = data.u8();
-						if (c === 0xFE) {
-							data.skip(8);
-						} else if (c === 0xFC || c === 0xC) {
-							data.skip(4);
-						}
-						break;
-					}
-					case "c": {
-						const c = data.u8();
-						if (c === 7 || c === 8)
-							data.skip(8);
-						else
-							data.skip(4);
-						break;
-					}
-					case 'v': {
-						if (data.u8() === 3)
-							data.skip(4);
-						else
-							data.skip(1);
-						break;
-					}
-				}
-			}
-
-		}
+	constructor(name: string, id: number, parent: Arena, position: vec3, angle: number, targetArena: Arena) {
+		super(name, id, parent, position, angle);
+		this.targetArena = targetArena;
 	}
 }
 
-class Todo { constructor(public n: number) {} }
-function todo(n: number) { return new Todo(n); }
+enum DoorFlags {
+	OPEN = 1,
+	OPENING = 2,
+	CLOSING = 4,
+	CLOSED = 8,
+	HIDE_WHEN_OPEN = 0x10,
+	STAY_OPEN = 0x20,
+	LOCKED = 0x40,
+	JUST_NUKED = 0x80,
+	HIDE_LOCK = 0x100
+}
 
-const p = 'p';
-const b = 'b';
-const v = 'v';
-const c = 'c';
 
-type OpcodeBase = number | typeof p | typeof b | typeof v | typeof c;
-type Opcode = OpcodeBase | OpcodeBase[] | null | Todo;
+function executeOpcode(entity: Entity, script: Reader) {
 
-const pb: Opcode = [p, b];
-const cb: Opcode = [c, b];
+	function log(...msg: any[]) {
+		/*
+		const entityName = (entity instanceof Arena)
+			? entity.name
+			: `${entity.arena.name}$${entity.name}_${entity.id}`;
+		*/
+		//const logMsg = `[${entityName.padEnd(18)}][${offset.toString(16).padStart(6, "0").toUpperCase()}: ${opcode.toString(16).padStart(2, "0").toUpperCase()}]: ${msg.join(' ')}`;
+		//console.log(logMsg);
+		const logMsg = `[${offset.toString(16).padStart(6, "0").toUpperCase()}: ${opcode.toString(16).padStart(2, "0").toUpperCase()}]: ${msg.join(' ')}`;
+		entity.log.push(logMsg);
+	}
 
-const opcodes: Opcode[] = [
-	// 0x00
-	null,
-	0, // 0x01 !
-	todo(0x02),
-	todo(0x03),
-	todo(0x04),
-	4,
-	0,
-	null,
-	2,
-	0, //0x09 !
-	[p, 1, b],
-	1,
-	todo(0x0C),
-	b,
-	[3, b],
-	0,
+	const arena = entity.arena;
+	const offset = script.offset;
+	const opcode = script.u8();
 
-	// 0x10
-	2,
-	b,
-	[4, b],
-	0,
-	0,
-	4,
-	b,
-	1,
-	[1, p],
-	p,
-	p,
-	b,
-	4,
-	[1, p, 4],
-	null,
-	todo(0x1F),
+	switch (opcode) {
+		case 1: { // set script resume point
+			log("set resume point");
+			// todo do it
+			break;
+		}
+		case 0x0B: // set some command byte
+			const someValue = script.u8();
+			// todo
+			log("set some value", someValue);
+			break;
+		case 0x09: { // clear callstack
+			log("clear function stack");
+			entity.callstack.length = 0; // todo is this correct
+			break;
+		}
+		case 0x10: { // set health
+			entity.health = script.u16();
+			log("set health", entity.health);
+			// todo destroy on health = 0?
+			break;
+		}
+		case 0x49: { // set some command byte
+			const someValue = script.u8();
+			// todo
+			log("set some value", someValue);
+			break;
+		}
+		case 0x95: { // spawn door
+			const position = script.vec3();
+			const angle = script.f32();
+			const id = script.i32();
+			const name = script.pstr();
+			const targetArenaName = script.pstr();
+			const scriptOffset = script.u32();
+			const targetArena = assertExists(arena.level.arenas.get(targetArenaName));
+			log("spawn door", position, angle, id, name, targetArenaName, scriptOffset);
+			const door = new DoorEntity(name, id, arena, position, angle, targetArena);
+			arena.spawnEntity(door, scriptOffset);
+			break;
+		}
+		case 0x96: { // set door animations
+			assert(entity instanceof DoorEntity);
+			const openAnimOffset = script.u32();
+			const closeAnimOffset = script.u32();
+			log("set door animations", openAnimOffset, closeAnimOffset);
+			break;
+		}
+		case 0x97: { // set door sounds
+			assert(entity instanceof DoorEntity);
+			const openSoundName = script.pstr();
+			const closeSoundName = script.pstr();
+			const openFinishSoundName = script.pstr();
+			const closeFinishSoundName = script.pstr();
+			log("set door sounds", openSoundName, closeSoundName, openFinishSoundName, closeFinishSoundName);
+			break;
+		}
+		case 0x98: { // set door flags
+			assert(entity instanceof DoorEntity);
+			// todo check masking
+			entity.doorFlags = script.u32();
+			log("set door flags", entity.doorFlags, DoorFlags[entity.doorFlags]);
+			break;
+		}
+		case 0x99: { // set door open distance
+			assert(entity instanceof DoorEntity);
+			entity.openDistance = script.f32();
+			log("set door open distance", entity.openDistance);
+			break;
+		}
+		case 0xA1: { // spawn pickup
+			const position = script.vec3();
+			const name = script.pstr();
+			const scriptOffset = script.u32();
 
-	// 0x20
-	todo(0x20),
-	[4, b],
-	b,
-	1,
-	1,
-	b,
-	cb,
-	v,
-	v,
-	1,
-	todo(0x2A),
-	8,
-	b,
-	cb,
-	b,
-	[4, b],
-
-	// 0x30
-	[4, b],
-	[1, b],
-	v,
-	v,
-	v,
-	v,
-	cb,
-	v,
-	2,
-	[3, b],
-	v,
-	todo(0x3B),
-	0,
-	todo(0x3D),
-	cb,
-	1,
-
-	// 0x40
-	v,
-	6,
-	6,
-	[2, c, b],
-	2,
-	2,
-	2,
-	[2, b],
-	[2, b],
-	1,
-	[2, p],
-	0,
-	4,
-	[1, p],
-	12,
-	12,
-
-	// 0x50
-	12,
-	[1, v],
-	v,
-	todo(0x53),
-	v,
-	1,
-	[12, p, b],
-	[5, b],
-	1,
-	todo(0x59),
-	[p, 4],
-	v,
-	2,
-	16,
-	todo(0x5E),
-	todo(0x5F),
-
-	// 0x60
-	[16, b],
-	1,
-	2,
-	6,
-	p,
-	0,
-	b,
-	[24, b],
-	4,
-	20,
-	4,
-	p,
-	b,
-	1,
-	0,
-	4,
-
-	// 0x70
-	[p, 16],
-	[12, p, 4],
-	b,
-	[8, b],
-	4,
-	4,
-	4,
-	[p, c, b],
-	4,
-	[4, b],
-	8,
-	b,
-	4,
-	0, //!
-	0,
-	cb,
-
-	// 0x80
-	[p, 2],
-	todo(0x81),
-	0,
-	1,
-	todo(0x84),
-	[p, 5],
-	v,
-	4,
-	34,
-	13,
-	37,
-	25,
-	3,
-	9,
-	[1, p, 6],
-	p,
-
-	// 0x90
-	[p, 30],
-	[p, 8],
-	[1, p, 24],
-	p,
-	[p, 2],
-	[20, p, p, 4],
-	todo(0x96),
-	[p, p, p, p],
-	4,
-	4,
-	2,
-	[v, b],
-	[1, p, 4],
-	[p, 8],
-	todo(0x9E),
-	todo(0x9F),
-
-	// 0xA0
-	cb,
-	[12, p, 4],
-	3,
-	[1, c, b],
-	todo(0xA4),
-	b,
-	b,
-	4,
-	2,
-	v,
-	4,
-	b,
-	todo(0xAC),
-	todo(0xAD),
-	[1, c, b],
-	[1, c, b],
-
-	// 0xB0
-	b,
-	v,
-	todo(0xB2),
-	[p, 4],
-	todo(0xB4),
-	todo(0xB5),
-	null,
-	todo(0xB7),
-	12,
-	cb,
-	5,
-	8,
-	cb,
-	todo(0xBD),
-	[1, p],
-	[1, c, b],
-
-	// 0xC0
-	[16, b],
-	todo(0xC1),
-	5,
-	[1, b],
-	null,
-	b,
-	[p, 9],
-	v,
-	[16, b],
-	8,
-	1,
-	todo(0xCB),
-	0,
-	1,
-	[8, p, 4],
-	[8, b],
-
-	// 0xD0
-	pb,
-	b,
-	v,
-	0,
-	b,
-	cb,
-	cb,
-	v,
-	6,
-	5,
-	4,
-	[8, b],
-	12,
-	[1, b],
-	cb,
-	p,
-
-	// 0xE0
-	todo(0xE0),
-	b,
-	20,
-	null,
-	p,
-	[4, b],
-	[20, p, b],
-	b,
-	[1, b],
-	pb,
-	cb,
-	16,
-	[12, b],
-	[24, b],
-	[1, c, b],
-	24,
-
-	// 0xF0
-	1,
-	cb,
-	todo(0xF2),
-	[3, b],
-	5,
-	todo(0xF5),
-	5,
-	[1, p, 4],
-	todo(0xF8),
-	todo(0xF9),
-	todo(0xFA),
-	1,
-	todo(0xFC),
-	0, //!
-	null,
-	null,
-];
+			log("spawn pickup", name, position);
+			const entity = new PickupEntity(name, 0, arena, position);
+			arena.spawnEntity(entity, scriptOffset);
+			break;
+		}
+		case 0xE6: { // spawn entity
+			const position = script.vec3();
+			const angle = script.f32();
+			const id = script.i32();
+			const name = script.pstr();
+			const scriptOffset = script.u32();
+			log("spawn entity", name);
+			const entity = new Entity(name, id, arena, position, angle);
+			arena.spawnEntity(entity, scriptOffset);
+			break;
+		}
+		case 0xFF: // end
+			assert(entity.callstack.length === 0);
+			log("finished script");
+			entity.script = null;
+			return false;
+		default:
+			log("unknown opcode!");
+			entity.script = null;
+			return false;
+	}
+	return true;
+}

@@ -1190,13 +1190,14 @@ pub fn parse_cmi(
 					// spawn door
 					let position = reader.vec3();
 					let angle = reader.f32();
-					let arena_index = reader.i32();
+					let id = reader.i32();
 					let object_name = reader.pascal_str();
 					let arena_name = reader.pascal_str();
 					let init_target = read_block(&mut blocks, reader);
-					wl!("Spawn Door] pos: {position:?}, angle: {angle}, arena index: {arena_index}, name: {object_name}, arena: {arena_name}, init target: {init_target}");
+					wl!("Spawn Door] pos: {position:?}, angle: {angle}, id: {id}, name: {object_name}, arena: {arena_name}, init target: {init_target}");
 				}
 				0x96 => {
+					// todo which do these correspond to?
 					let anim_offset1 = reader.u32();
 					let anim_offset2 = reader.u32();
 
@@ -1225,10 +1226,10 @@ pub fn parse_cmi(
 					wl!("Set door sounds] open: \"{open_sound}\", close: \"{close_sound}\", open finish: \"{open_finish_sound}\", close finish: \"{close_finish_sound}\"");
 				}
 				0x98 => {
-					let flag = reader.u32();
+					let flags = reader.u32();
 					wl!(
 						"Set door flags] flags: {}",
-						flag_names(DOOR_FLAG_NAMES, flag)
+						flag_names(DOOR_FLAG_NAMES, flags)
 					);
 				}
 				0x99 => {

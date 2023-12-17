@@ -1,4 +1,4 @@
-import * as fs from "fs";
+import * as fs from "fs/promises";
 import * as path from "path";
 import * as cmi from "./cmi";
 
@@ -41,40 +41,40 @@ function parse_dti(buffer: DataView): cmi.BspEntity[] {
 	return result;
 }
 
-for (let level_num = 3; level_num <= 8; ++level_num) {
-	const dti_buffer = fs.readFileSync(path.resolve(`../assets/TRAVERSE/LEVEL${level_num}/LEVEL${level_num}.DTI`));
+for (let levelIndex = 3; levelIndex <= 8; ++levelIndex) {
+	const dtiEntitiesPromise = fs.readFile(path.resolve(`../assets/TRAVERSE/LEVEL${levelIndex}/LEVEL${levelIndex}.DTI`)).then(dtiBuffer=>parse_dti(new DataView(dtiBuffer.buffer, 4)));
+	const cmiBufferPromise = fs.readFile(path.resolve(`../assets/TRAVERSE/LEVEL${levelIndex}/LEVEL${levelIndex}.CMI`));
 
-	const dtiEntities = parse_dti(new DataView(dti_buffer.buffer, 4));
+	const outputPath = "output/level" + levelIndex;
 
-	const cmi_buffer = fs.readFileSync(path.resolve(`../assets/TRAVERSE/LEVEL${level_num}/LEVEL${level_num}.CMI`));
+	Promise.all([dtiEntitiesPromise, cmiBufferPromise]).then(([dtiEntities, cmiBuffer])=>{
+		const level = cmi.go(new DataView(cmiBuffer.buffer, 4), dtiEntities);
 
-	const level = cmi.go(new DataView(cmi_buffer.buffer, 4), dtiEntities);
+		for (const arena of level.arenas.values()) {
+			const arenaPath = outputPath + '/' + arena.name;
+			const dirPromise = fs.mkdir(arenaPath, {recursive:true}).catch(()=>{});
 
-	const outputPath = "output/level" + level_num;
-	for (const arena of level.arenas.values()) {
-		const arenaPath = outputPath + '/' + arena.name;
-		if (!fs.existsSync(arenaPath))
-			fs.mkdirSync(arenaPath, { recursive: true });
-
-
-		const counts = new Map<string, number>();
-		for (const entity of arena.entities) {
-			const name = entity.name + '_' + entity.id;
-			counts.set(name, (counts.get(name) ?? 0) + 1);
-		}
-
-		const seenCount = new Map<string, number>();
-		for (const entity of [arena, ...arena.entities]) {
-			let name = (entity === arena) ? entity.name : entity.name + '_' + entity.id;
-
-			if (counts.get(name)! > 1) {
-				const count = seenCount.get(name) ?? 1;
-				seenCount.set(name, count + 1);
-				name += ` (${count})`;
+			const counts = new Map<string, number>();
+			for (const entity of arena.entities) {
+				const name = entity.name + '_' + entity.id;
+				counts.set(name, (counts.get(name) ?? 0) + 1);
 			}
 
-			fs.writeFile(`${arenaPath}/${name}.txt`, entity.log.join('\n'), () => {});
-		}
-	}
 
+			dirPromise.then(()=>{
+				const seenCount = new Map<string, number>();
+				for (const entity of [arena, ...arena.entities]) {
+					let name = (entity === arena) ? entity.name : entity.name + '_' + entity.id;
+
+					if (counts.get(name)! > 1) {
+						const count = seenCount.get(name) ?? 1;
+						seenCount.set(name, count + 1);
+						name += ` (${count})`;
+					}
+
+					fs.writeFile(`${arenaPath}/${name}.txt`, entity.log.join('\n'));
+				}
+			});
+		}
+	});
 }

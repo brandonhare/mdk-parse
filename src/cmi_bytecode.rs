@@ -392,17 +392,16 @@ pub fn parse_cmi(
 
 					match order_target {
 						2 => w!("Normal"),
-						3 => (),
+						3 => (), // Everyone
 						4 => w!("Single"),
 						5 => {
 							let value = reader.u32();
 							w!("ID={value}");
 						}
-						6 => (),
+						6 => (), // Visible
 						7 => w!("Children"),
-						8 => w!("Children"),
 						9 => w!("Buddy"),
-						10 => (),
+						10 => (), // Height
 						n => w!("Unknown (target: {n})"),
 					}
 

@@ -8,6 +8,7 @@ function assertExists<T>(value: T, message = "value does not exist") {
 	return value;
 }
 
+export type vec2 = [number, number];
 export type vec3 = [number, number, number];
 
 export class Reader {
@@ -57,6 +58,12 @@ export class Reader {
 		this.offset += 4;
 		return result;
 	}
+	vec2(): vec2 {
+		const x = this.data.getFloat32(this.offset, true);
+		const y = this.data.getFloat32(this.offset + 4, true);
+		this.offset += 8;
+		return [x, y];
+	}
 	vec3(): vec3 {
 		const x = this.data.getFloat32(this.offset, true);
 		const y = this.data.getFloat32(this.offset + 4, true);
@@ -100,9 +107,11 @@ class Entity {
 	minOrderRange = 0;
 	maxOrderRange = 0;
 	variables = [0, 0, 0, 0];
+	buddy: Entity | null = null;
 
 	arena: Arena;
 	scriptOffset = 0;
+	scriptCallstack: number[] = [];
 	scriptDelay = 0;
 	scriptOffsetAfterDelay = 0;
 
@@ -317,6 +326,105 @@ function getVar(entity: Entity, script: Reader): number {
 	}
 }
 
+const enum BranchType {
+	Goto = 0xC,
+	Call = 0xFC,
+	IfElse = 0xFE,
+	Return = 0xFD,
+};
+class BranchTarget {
+	type: BranchType;
+	targetOffset: number;
+	elseOffset: number;
+	constructor(script: Reader) {
+		this.type = script.u8();
+		switch (this.type) {
+			case BranchType.Goto:
+			case BranchType.Call:
+				this.targetOffset = script.u32();
+				this.elseOffset = 0;
+				break;
+			case BranchType.IfElse:
+				this.targetOffset = script.u32();
+				this.elseOffset = script.u32();
+				break;
+			case BranchType.Return:
+				break;
+			default:
+				assert(false, "unknown cmi branch type: " + this.type);
+		}
+	}
+	run(entity: Entity, condition: boolean) {
+		if (condition) {
+			if (this.type === BranchType.Call || this.type === BranchType.IfElse) {
+				// todo
+			} else if (this.type !== BranchType.Return) {
+				entity.scriptOffset = this.targetOffset;
+				// todo callstack3
+			} else { // return
+				assert(entity.scriptCallstack.length > 0);
+				const returnOffset = assertExists(entity.scriptCallstack.pop());
+				// todo
+			}
+		} else {
+			// todo
+		}
+	}
+}
+
+
+function findOrderTargets(sourceEntity: Entity, orderTargetCode: number, orderTargetConditionValue: number, orderTargetName: string, orderTargetId: number): Entity[] {
+	if (orderTargetCode === 9) { // buddy
+		if (sourceEntity.buddy)
+			return [sourceEntity.buddy];
+		else
+			return [];
+	}
+	const result: Entity[] = [];
+
+	for (const entity of sourceEntity.arena.entities) {
+		if (entity === sourceEntity)
+			continue;
+
+		if (orderTargetCode !== 3) { // (not) target everyone
+			if (entity.name !== orderTargetName) // skip this entity if their name doesn't match, unless we're targetting everyone
+				continue;
+		}
+
+		if (entity.maxOrderRange < sourceEntity.minOrderRange)
+			continue;
+
+		if (orderTargetCode === 5) { // target id
+			if (entity.id !== orderTargetConditionValue)
+				continue;
+		}
+
+		/*
+		if (orderTargetCode === 7 || orderTargetCode === 8) {
+			if (entity.orderCommander !== sourceEntity)
+				continue;
+		}
+		if (entity.orderCommander && entity.orderCommander != sourceEntity && sourceEntity.minOrderRange <= entity.orderCommander.minOrderRange) {
+			continue;
+		}
+		*/
+
+		if (orderTargetCode === 6) { // visible
+			// todo check visible
+		} else if (orderTargetCode === 10) { // y position
+			if (entity.position[1] < orderTargetConditionValue)
+				continue;
+		}
+		// success
+		result.push(entity);
+
+		if (orderTargetCode === 4) // only one
+			break;
+	}
+
+	return result;
+}
+
 function executeOpcode(entity: Entity, script: Reader) {
 
 	function log(...msg: any[]) {
@@ -327,18 +435,63 @@ function executeOpcode(entity: Entity, script: Reader) {
 		*/
 		//const logMsg = `[${entityName.padEnd(18)}][${offset.toString(16).padStart(6, "0").toUpperCase()}: ${opcode.toString(16).padStart(2, "0").toUpperCase()}]: ${msg.join(' ')}`;
 		//console.log(logMsg);
-		const logMsg = `[${offset.toString(16).padStart(6, "0").toUpperCase()}: ${opcode.toString(16).padStart(2, "0").toUpperCase()}]: ${msg.join(' ')}`;
+		const logMsg = `[${opcodeOffset.toString(16).padStart(6, "0").toUpperCase()}: ${opcode.toString(16).padStart(2, "0").toUpperCase()}]: ${msg.join(' ')}`;
 		entity.log.push(logMsg);
 	}
 
 	const arena = entity.arena;
-	const offset = script.offset;
+	const opcodeOffset = script.offset;
 	const opcode = script.u8();
 
 	switch (opcode) {
 		case 0x01: { // set script resume point
 			log("set resume point");
-			entity.scriptOffset = offset + 1;
+			entity.scriptOffset = opcodeOffset + 1;
+			break;
+		}
+		case 0x04: { // give order
+
+			// what kind of order this is
+			const orderType = script.u8();
+
+			const orderValue = (orderType === 7) // call function
+				? new BranchTarget(script).targetOffset
+				: (
+					(orderType === 0x2B) // move target
+						? script.vec2()
+						: null
+				);
+
+			// who to receive the order
+			const orderTargetType = script.u8();
+			// max distance or y value
+			const orderTargetConditionValue = (orderTargetType === 6 || orderTargetType === 10) ? script.f32() : 0;
+			// entity name
+			const orderTargetName = (orderTargetType !== 3 && orderTargetType !== 9) ? script.pstr() : "";
+			const orderTargetId = (orderTargetType === 5) ? script.u32() : 0;
+
+			const targets = findOrderTargets(entity, orderTargetType, orderTargetConditionValue, orderTargetName, orderTargetId);
+
+			log("order", JSON.stringify({ orderType, orderTargetType, orderTargetConditionValue, orderTargetName, orderTargetId, num_targets: targets.length }));
+
+			for (const target of targets) {
+				log(" - target:", target.name);
+				target.log.push("Received order from " + entity.name);
+				switch (orderType) {
+					case 7: // call
+						if (target.scriptOffset !== orderValue) {
+							target.scriptCallstack.push(target.scriptOffset);
+							target.scriptOffset = orderValue as number;
+							target.scriptOffsetAfterDelay = target.scriptOffset;
+							target.scriptDelay = 0;
+						}
+						break;
+					default:
+						// todo
+						break;
+				}
+			}
+
 			break;
 		}
 		case 0x0B: // set min order range
@@ -387,6 +540,17 @@ function executeOpcode(entity: Entity, script: Reader) {
 			entity.maxOrderRange = script.u8();
 			log("set max order range", entity.maxOrderRange);
 			break;
+		}
+		case 0x60: { // branch if player is in square
+			const minX = script.f32();
+			const minY = script.f32();
+			const maxX = script.f32();
+			const maxY = script.f32();
+			const branch = new BranchTarget(script);
+			// todo check player
+			log("branch if player in range");
+			branch.run(entity, false);
+			return false; // todo
 		}
 		case 0x74: {
 			const flags = script.u32();

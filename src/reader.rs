@@ -315,6 +315,9 @@ impl<'buf> Reader<'buf> {
 	}
 	pub fn try_get_vec<T: Readable + std::fmt::Debug>(&mut self, count: usize) -> Option<Vec<T>> {
 		let mut result = Vec::with_capacity(count);
+		if count * std::mem::size_of::<T>() > self.remaining_len() {
+			return None;
+		}
 		for _ in 0..count {
 			result.push(self.try_get()?);
 		}
@@ -324,6 +327,9 @@ impl<'buf> Reader<'buf> {
 		&mut self, count: usize,
 	) -> Option<Vec<T>> {
 		let mut result = Vec::with_capacity(count);
+		if count * std::mem::size_of::<T>() > self.remaining_len() {
+			return None;
+		}
 		for _ in 0..count {
 			result.push(self.try_get_unvalidated()?);
 		}

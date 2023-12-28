@@ -1760,8 +1760,16 @@ fn save_bsp_debug(name: &str, bsp: &Bsp, output: &mut OutputWriter) {
 			let mesh_node = gltf.create_child_node(node, format!("mesh_{index}"), None);
 			add_mesh_to_gltf(gltf, format!("{index}"), temp_mesh, &[], Some(mesh_node));
 
-			let extras = serde_json::json!({"flags":temp_mesh.tris.iter().map(|t|serde_json::json!({"id": t.id(), "flags":t.flags & 0xF_FFFF})).collect::<Vec<_>>()});
-			gltf.set_node_extras(mesh_node, extras);
+			let flags_summary: Vec<_> = temp_mesh
+				.tris
+				.iter()
+				.enumerate()
+				.filter(|(_,t)| t.flags != 0)
+				.map(
+					|(i,t)| serde_json::json!({"index": i, "id": t.id(), "outlines": t.outlines(), "flags": t.flags & 0x008F_FFFF}),
+				)
+				.collect();
+			gltf.set_node_extras(mesh_node, "flags", flags_summary);
 		}
 
 		let behind_index = plane.plane_index_behind;
@@ -1850,22 +1858,18 @@ struct MeshTri {
 	indices: [u16; 3],
 	texture: i16,
 	uvs: [Vec2; 3],
-	flags: u32,
+	flags: u32, // bsp id and flags, 0 for normal meshes
 }
 impl MeshTri {
 	fn id(&self) -> u8 {
 		(self.flags >> 24) as u8
 	}
-	fn outlines(&self) -> Option<[bool; 3]> {
-		if self.flags & 0x800000 != 0 {
-			Some([
-				self.flags & 0x100000 != 0,
-				self.flags & 0x200000 != 0,
-				self.flags & 0x400000 != 0,
-			])
-		} else {
-			None
-		}
+	fn outlines(&self) -> [bool; 3] {
+		[
+			self.flags & 0x100000 != 0,
+			self.flags & 0x200000 != 0,
+			self.flags & 0x400000 != 0,
+		]
 	}
 }
 
@@ -1953,6 +1957,11 @@ fn try_parse_mesh<'a>(data: &mut Reader<'a>, read_textures: bool) -> Option<Mesh
 		return None;
 	}
 	let tris = try_parse_mesh_tris(data, num_tris)?;
+
+	assert!(
+		tris.iter().all(|tri| tri.flags == 0),
+		"found mesh with non-zero triangle flags!"
+	);
 
 	let [min_x, max_x, min_y, max_y, min_z, max_z]: [f32; 6] = data.try_get()?;
 	let bbox = [
@@ -2099,7 +2108,7 @@ fn add_mesh_to_gltf(
 			// fully degenerate
 			continue;
 		}
-		if tri.outlines().is_none()
+		if tri.outlines() == [false; 3]
 			&& (indices[0] == indices[1] || indices[1] == indices[2] || indices[0] == indices[2])
 		{
 			// partially degenerate

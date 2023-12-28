@@ -151,8 +151,8 @@ struct Node {
 	translation: Option<[f32; 3]>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	children: Vec<NodeIndex>,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	extras: Option<serde_json::value::Value>,
+	#[serde(skip_serializing_if = "serde_json::Map::is_empty")]
+	extras: serde_json::Map<String, serde_json::Value>,
 
 	#[serde(skip)]
 	parent: Option<NodeIndex>,
@@ -219,7 +219,7 @@ impl Gltf {
 				translation: None,
 				children: Vec::new(),
 				parent: None,
-				extras: None,
+				extras: Default::default(),
 			}],
 			..Default::default()
 		}
@@ -277,7 +277,7 @@ impl Gltf {
 			translation: None,
 			children: Vec::new(),
 			parent: None,
-			extras: None,
+			extras: Default::default(),
 		});
 		result
 	}
@@ -312,8 +312,10 @@ impl Gltf {
 	pub fn get_node_mesh(&self, node: NodeIndex) -> Option<MeshIndex> {
 		self.nodes[node.0].mesh
 	}
-	pub fn set_node_extras(&mut self, node: NodeIndex, extras: impl Into<serde_json::Value>) {
-		self.nodes[node.0].extras = Some(extras.into())
+	pub fn set_node_extras(
+		&mut self, node: NodeIndex, name: impl Into<String>, value: impl Into<serde_json::Value>,
+	) {
+		self.nodes[node.0].extras.insert(name.into(), value.into());
 	}
 
 	pub fn create_base_node(&mut self, name: String, mesh: Option<MeshIndex>) -> NodeIndex {

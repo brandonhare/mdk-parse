@@ -1139,11 +1139,13 @@ fn try_parse_alienanim<'a>(name: &str, mut data: Reader<'a>) -> Option<AlienAnim
 	}
 
 	// someAnimVector (local space)
-	let frame_vectors = data.try_get_vec::<Vec3>(num_frames)?;
+	let mut frame_vectors = data.try_get_vec::<Vec3>(num_frames)?;
+	swizzle_slice(&mut frame_vectors);
 
 	let frames_data_count = data.try_u32().filter(|n| *n <= 10000)? as usize;
 	// part locations ?
-	let frames_data = data.try_get_vec::<Vec3>(frames_data_count * num_frames)?;
+	let mut frames_data = data.try_get_vec::<Vec3>(frames_data_count * num_frames)?;
+	swizzle_slice(&mut frames_data);
 
 	let frames: Vec<AlienAnimFrame> = if frames_data_count * num_frames != 0 {
 		frame_vectors
@@ -1176,7 +1178,8 @@ fn try_parse_alienanim<'a>(name: &str, mut data: Reader<'a>) -> Option<AlienAnim
 		let part = if scale == 0.0 {
 			let scale_vec = (0x8000 >> (data.try_u8()? & 0x3F)) as f32;
 			let scale_pos = (0x8000 >> (data.try_u8()? & 0x3F)) as f32;
-			let vecs = data.try_get_vec::<Vec3>(count)?;
+			let mut vecs = data.try_get_vec::<Vec3>(count)?;
+			swizzle_slice(&mut vecs);
 
 			// let anim_data = data.try_get_vec::<[i16; 12]>(num_frames)?;
 			let transforms = (0..num_frames)
@@ -1188,6 +1191,7 @@ fn try_parse_alienanim<'a>(name: &str, mut data: Reader<'a>) -> Option<AlienAnim
 						}
 						row[3] = data.try_i16()? as f32 / scale_pos;
 					}
+					// todo swizzle
 					Some(result)
 				})
 				.collect::<Option<Vec<_>>>()?;
@@ -1199,7 +1203,9 @@ fn try_parse_alienanim<'a>(name: &str, mut data: Reader<'a>) -> Option<AlienAnim
 				data: AlienAnimPartType::Transforms(transforms),
 			}
 		} else {
-			let vecs = data.try_get_vec::<Vec3>(count)?;
+			let mut vecs = data.try_get_vec::<Vec3>(count)?;
+			swizzle_slice(&mut vecs);
+
 			let mut rows = Vec::new();
 			for j in 0..=num_frames {
 				if j == num_frames {
@@ -1212,13 +1218,15 @@ fn try_parse_alienanim<'a>(name: &str, mut data: Reader<'a>) -> Option<AlienAnim
 				}
 
 				//let triples = data.try_get_vec::<[i8; 3]>(count)?;
-				let triples = (0..count)
+				let mut triples = (0..count)
 					.map(|_| {
 						data.try_get::<[i8; 3]>()
 							.map(|ns| ns.map(|n| n as f32 * scale))
 					})
 					.collect::<Option<Vec<Vec3>>>()?;
 				// todo verify
+
+				swizzle_slice(&mut triples);
 
 				rows.push(AlienAnimPartRow { index, triples });
 			}
@@ -1246,7 +1254,7 @@ fn try_parse_alienanim<'a>(name: &str, mut data: Reader<'a>) -> Option<AlienAnim
 	})
 }
 
-fn save_alienanim(name: &str, anim: &AlienAnim, output: &mut OutputWriter) {
+fn save_alienanim_text(name: &str, anim: &AlienAnim, output: &mut OutputWriter) {
 	let mut result = format!(
 		"speed: {}\nframe data count: {}\n\nframes: ({}):\n",
 		anim.speed,
@@ -1308,6 +1316,122 @@ fn save_alienanim(name: &str, anim: &AlienAnim, output: &mut OutputWriter) {
 	}
 
 	output.write(name, "anim.txt", result.as_bytes());
+}
+
+fn save_alienanim(name: &str, anim: &AlienAnim, output: &mut OutputWriter) {
+	let num_frames = anim.frames.len();
+
+	let num_points = anim
+		.frames
+		.first()
+		.map(|f| f.data.len())
+		.unwrap_or_default();
+
+	let fps = 30.0;
+	let time_period = anim.speed / fps;
+
+	let mut gltf = gltf::Gltf::new(name.into());
+	let cube_mesh = gltf.get_cube_mesh();
+	let animation = gltf.create_animation(name.into());
+	let root_node = gltf.get_root_node();
+	let base_timestamps = gltf.create_animation_timestamps(num_frames, fps / anim.speed);
+	let interpolation = Some(gltf::AnimationInterpolationMode::Step);
+
+	let mut root_path: Vec<Vec3> = Vec::with_capacity(num_frames);
+	let mut point_paths: Vec<Vec<Vec3>> = Vec::with_capacity(num_points);
+	point_paths.resize_with(num_points, || Vec::with_capacity(num_frames));
+	for frame in &anim.frames {
+		root_path.push(frame.vec);
+		assert_eq!(num_points, frame.data.len());
+		for (path, point) in point_paths.iter_mut().zip(&frame.data) {
+			path.push(*point);
+		}
+	}
+
+	if !point_paths.is_empty() {
+		let points_node = gltf.create_child_node(root_node, "Points".into(), None);
+		for (point_index, point_path) in point_paths.iter().enumerate() {
+			let node =
+				gltf.create_child_node(points_node, point_index.to_string(), Some(cube_mesh));
+			gltf.add_animation_translation(
+				animation,
+				node,
+				base_timestamps,
+				point_path,
+				interpolation,
+			);
+		}
+	}
+
+	for part in &anim.parts {
+		let num_points = part.vecs.len();
+		let mut timestamps: Vec<f32> = Vec::with_capacity(num_frames);
+		timestamps.push(0.0);
+		let mut points: Vec<Vec<Vec3>> = Vec::with_capacity(num_points);
+		for origin in &part.vecs {
+			let mut point_path = Vec::with_capacity(num_frames);
+			point_path.push(*origin);
+			points.push(point_path);
+		}
+
+		match &part.data {
+			AlienAnimPartType::Vecs(frames) => {
+				let mut prev_frame_index = 0;
+				for frame in frames {
+					assert!(
+						prev_frame_index <= frame.index,
+						"animation frames out of order"
+					);
+					assert!((frame.index as usize) < num_frames, "too many frames");
+					assert!(frame.index != 0, "animation contained frame 0 data");
+					assert_eq!(
+						points.len(),
+						frame.triples.len(),
+						"frame point count mismatch"
+					);
+
+					timestamps.push(frame.index as f32 * time_period);
+
+					for (point_path, pos) in points.iter_mut().zip(&frame.triples) {
+						let origin = point_path[0];
+						point_path.push([
+							pos[0] + origin[0],
+							pos[1] + origin[1],
+							pos[2] + origin[2],
+						]);
+					}
+
+					prev_frame_index = frame.index;
+				}
+			}
+			AlienAnimPartType::Transforms(transforms) => {
+				assert_eq!(transforms.len(), num_frames);
+				// todo
+				continue;
+			}
+		}
+
+		let part_node = gltf.create_child_node(root_node, part.name.into(), None);
+		for (point_index, point_path) in points.iter().enumerate() {
+			let point_node =
+				gltf.create_child_node(part_node, point_index.to_string(), Some(cube_mesh));
+			let timestamps_accessor = gltf.add_animation_timestamps(&timestamps);
+			gltf.add_animation_translation(
+				animation,
+				point_node,
+				timestamps_accessor,
+				point_path,
+				interpolation,
+			);
+		}
+	}
+
+	gltf.combine_buffers();
+	output.write(
+		name,
+		"anim.gltf",
+		serde_json::to_string(&gltf).unwrap().as_bytes(),
+	);
 }
 
 fn parse_lbb(path: &Path) {

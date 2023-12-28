@@ -237,13 +237,13 @@ impl<'a> Dti<'a> {
 
 	pub fn save(&self, output: &mut OutputWriter) {
 		//output.write("debug", "txt", format!("{self:#?}").as_bytes());
-		output.write_palette("palette", &self.pal);
+		output.write_palette("palette", self.pal);
 		output.write_png(
 			"skybox",
 			&self.sky.pixels,
 			self.sky.src_width,
 			self.sky.src_height,
-			Some(&self.pal),
+			Some(self.pal),
 		);
 
 		use std::fmt::Write;

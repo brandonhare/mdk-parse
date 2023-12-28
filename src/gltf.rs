@@ -69,10 +69,15 @@ struct Image {
 	name: String,
 }
 
-//const FILTER_NEAREST: isize = 9728;
+#[allow(unused)]
+const FILTER_NEAREST: isize = 9728;
+#[allow(unused)]
 const FILTER_LINEAR: isize = 9729;
-//const WRAP_CLAMP: isize = 33071;
+#[allow(unused)]
+const WRAP_CLAMP: isize = 33071;
+#[allow(unused)]
 const WRAP_REPEAT: isize = 10497;
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Sampler {
@@ -121,7 +126,8 @@ fn serialize_buffer_uri<S: Serializer>(uri: &[u8], s: S) -> Result<S::Ok, S::Err
 struct BufferView {
 	buffer: BufferIndex,
 	byte_length: usize,
-	target: usize,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	target: Option<usize>,
 	byte_offset: usize,
 	//pub byte_stride : Option<usize>
 }
@@ -158,10 +164,48 @@ struct Node {
 	parent: Option<NodeIndex>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
+enum AnimationChannelTargetPath {
+	Translation,
+	Rotation,
+	Scale,
+	Weights,
+}
+#[derive(Serialize)]
+struct AnimationChannelTarget {
+	node: NodeIndex,
+	path: AnimationChannelTargetPath,
+}
+#[derive(Serialize)]
+struct AnimationChannel {
+	sampler: usize,
+	target: AnimationChannelTarget,
+}
+#[derive(Debug, Serialize, Copy, Clone, PartialEq, Eq)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum AnimationInterpolationMode {
+	Linear,
+	Step,
+	CubicSpline,
+}
+#[derive(Serialize)]
+struct AnimationSampler {
+	input: AccessorIndex,
+	output: AccessorIndex,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	interpolation: Option<AnimationInterpolationMode>,
+}
+#[derive(Serialize)]
+struct Animation {
+	name: String,
+	channels: Vec<AnimationChannel>,
+	samplers: Vec<AnimationSampler>,
+}
+
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 pub struct NodeIndex(usize);
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
-#[must_use]
 pub struct MeshIndex(usize);
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 pub struct MaterialIndex(usize);
@@ -170,12 +214,13 @@ struct BufferIndex(usize);
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 struct BufferViewIndex(usize);
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
-#[must_use]
 pub struct AccessorIndex(usize);
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 struct ImageIndex(usize);
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 struct TextureIndex(usize);
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
+pub struct AnimationIndex(usize);
 
 #[derive(Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -201,9 +246,18 @@ pub struct Gltf {
 	buffers: Vec<Buffer>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	buffer_views: Vec<BufferView>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	animations: Vec<Animation>,
 
 	#[serde(skip)]
 	debug_cube: Option<MeshIndex>,
+}
+
+enum PrimitiveTarget {
+	AnimationData,
+	AnimationTimestamps,
+	Indices = 34963,
+	Vertices = 34962,
 }
 
 impl Gltf {
@@ -331,8 +385,10 @@ impl Gltf {
 		mesh
 	}
 
-	fn add_primitive_data<T: BufferData>(&mut self, data: &[T], indices: bool) -> AccessorIndex {
-		if indices {
+	fn add_primitive_data<T: BufferData>(
+		&mut self, data: &[T], target: PrimitiveTarget,
+	) -> AccessorIndex {
+		if matches!(target, PrimitiveTarget::Indices) {
 			assert!(T::NUM_COMPONENTS == 1, "indices must be flat!");
 		}
 
@@ -344,11 +400,11 @@ impl Gltf {
 			byte_length: data_u8.len(),
 		});
 
-		let target = if indices {
-			34963 // ELEMENT_ARRAY_BUFFER
-		} else {
-			34962 // ARRAY_BUFFER
+		let target = match target {
+			PrimitiveTarget::AnimationTimestamps | PrimitiveTarget::AnimationData => None,
+			PrimitiveTarget::Indices | PrimitiveTarget::Vertices => Some(target as usize),
 		};
+
 		let view_index = BufferViewIndex(self.buffer_views.len());
 		self.buffer_views.push(BufferView {
 			buffer: buffer_index,
@@ -373,13 +429,13 @@ impl Gltf {
 	}
 
 	fn add_positions(&mut self, data: &[[f32; 3]]) -> AccessorIndex {
-		self.add_primitive_data(data, false)
+		self.add_primitive_data(data, PrimitiveTarget::Vertices)
 	}
 	fn add_uvs(&mut self, data: &[[f32; 2]]) -> AccessorIndex {
-		self.add_primitive_data(data, false)
+		self.add_primitive_data(data, PrimitiveTarget::Vertices)
 	}
 	fn add_indices(&mut self, data: &[u16]) -> AccessorIndex {
-		self.add_primitive_data(data, true)
+		self.add_primitive_data(data, PrimitiveTarget::Indices)
 	}
 
 	pub fn add_mesh_primitive(
@@ -409,6 +465,50 @@ impl Gltf {
 		mesh
 	}
 
+	pub fn create_animation(&mut self, name: String) -> AnimationIndex {
+		let result = AnimationIndex(self.animations.len());
+		self.animations.push(Animation {
+			name,
+			channels: Vec::new(),
+			samplers: Vec::new(),
+		});
+		result
+	}
+
+	pub fn create_animation_timestamps(&mut self, num_frames: usize, fps: f32) -> AccessorIndex {
+		let period = fps.recip();
+		self.add_animation_timestamps(
+			&(0..num_frames)
+				.map(|n| n as f32 * period)
+				.collect::<Vec<f32>>(),
+		)
+	}
+	pub fn add_animation_timestamps(&mut self, timestamps: &[f32]) -> AccessorIndex {
+		self.add_primitive_data(timestamps, PrimitiveTarget::AnimationTimestamps)
+	}
+
+	pub fn add_animation_translation(
+		&mut self, animation: AnimationIndex, node: NodeIndex, timestamps: AccessorIndex,
+		path: &[Vec3], interpolation: Option<AnimationInterpolationMode>,
+	) {
+		let data = self.add_primitive_data(path, PrimitiveTarget::AnimationData);
+
+		let anim = &mut self.animations[animation.0];
+		let sampler_index = anim.samplers.len();
+		anim.samplers.push(AnimationSampler {
+			input: timestamps,
+			output: data,
+			interpolation,
+		});
+		anim.channels.push(AnimationChannel {
+			sampler: sampler_index,
+			target: AnimationChannelTarget {
+				node,
+				path: AnimationChannelTargetPath::Translation,
+			},
+		});
+	}
+
 	pub fn combine_buffers(&mut self) {
 		for view in &mut self.buffer_views {
 			let buffer_index = view.buffer.0;
@@ -436,7 +536,7 @@ impl Gltf {
 		self.buffers.truncate(1);
 	}
 
-	fn get_debug_cube(&mut self) -> MeshIndex {
+	pub fn get_cube_mesh(&mut self) -> MeshIndex {
 		if let Some(result) = self.debug_cube {
 			return result;
 		};
@@ -458,7 +558,7 @@ impl Gltf {
 	pub fn create_points_nodes(
 		&mut self, name: String, points: &[Vec3], parent: Option<NodeIndex>,
 	) -> NodeIndex {
-		let cube = self.get_debug_cube();
+		let cube = self.get_cube_mesh();
 
 		let container = self.create_node(name, None);
 

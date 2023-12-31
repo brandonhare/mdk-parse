@@ -496,6 +496,21 @@ fn parse_mti_data(output: &mut OutputWriter, buf: &[u8], pal: PalRef) {
 
 				save_anim(name, &frames, 12, output, pal);
 			}
+
+			// print summary
+			let mut summary = String::new();
+			if a != 0.0 {
+				writeln!(summary, "a: {a}").unwrap();
+			}
+			if b != 3.5 {
+				writeln!(summary, "b: {b}").unwrap();
+			}
+			if flags_rest != 0 {
+				writeln!(summary, "flags: {flags_rest:X}").unwrap();
+			}
+			if !summary.is_empty() {
+				output.write(name, "txt", summary.as_bytes());
+			}
 		}
 	}
 

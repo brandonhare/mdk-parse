@@ -118,7 +118,8 @@ impl<'a> Drop for DataFile<'a> {
 		for span in read_range.as_slice() {
 			let (start, end) = map_bound(span);
 			let len = end - start;
-			if len <= 3 {
+			if len <= 3 && self.1[start..end].iter().all(|&b| b == 0) {
+				// padding
 				continue;
 			}
 			if first {

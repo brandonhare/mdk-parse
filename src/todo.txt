@@ -1,7 +1,5 @@
 dti skybox reflection index, more params, entity arena num
 level6/olym_9 overlapping palette?
 fall3d.bni/zoom animation palette
-mesh reference points
-m_comm animated texture
-cmi missing read ranges
-animation format
+mesh reference points purpose
+textures a, b, flags?

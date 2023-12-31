@@ -390,74 +390,111 @@ fn parse_mti_data(output: &mut OutputWriter, buf: &[u8], pal: PalRef) {
 
 	let mut pen_entries = Vec::new();
 
-	for i in 0..num_entries {
+	for _ in 0..num_entries {
 		let name = reader.str(8);
 		let flags = reader.u32();
 
 		if flags == 0xFFFFFFFF {
-			let b = reader.i32();
-			let c = reader.u32();
-			let d = reader.u32();
-			assert_eq!(c, 0);
-			assert_eq!(d, 0);
-			pen_entries.push((name, b));
+			// pen
+			let pen_value = reader.i32();
+			let _ = reader.u32(); // padding
+			let _ = reader.u32();
+			pen_entries.push((name, pen_value));
 		} else {
-			let b = reader.f32();
-			let c = reader.f32();
+			// texture
+			let a = reader.f32(); // todo what is this
+			let b = reader.f32(); // todo what is this
 			let start_offset = reader.u32() as usize;
 			let mut data = reader.clone_at(start_offset);
 
-			let mut num_frames = 1;
-			let flags_mask = flags & 0x30000;
-			let flags2 = flags & 0xFFFF;
+			let flags_mask = flags & 0x30000; // if the texture is animated or not
+			let flags_rest = flags & !0x30000; // todo what are these
 
-			if flags_mask != 0 {
-				num_frames = data.u32() as usize;
-			}
-			let width = data.u16() as u32;
-			let height = data.u16() as u32;
+			assert_ne!(
+				flags_mask, 0x30000,
+				"unknown mti flags combination ({flags:X}) on {name}"
+			);
 
-			let frame_size = (width * height) as usize;
-			if num_frames == 1 || flags_mask == 0x20000 {
-				let pixels = data.slice(frame_size);
-				output.write_png(name, pixels, width, height, pal);
+			let num_frames = if flags_mask != 0 {
+				data.u32() as usize
 			} else {
-				let anims: Vec<Anim> = (0..num_frames)
+				1
+			};
+			let width = data.u16();
+			let height = data.u16();
+			let frame_size = width as usize * height as usize;
+
+			if num_frames == 1 {
+				let pixels = data.slice(frame_size);
+				output.write_png(name, pixels, width as u32, height as u32, pal);
+			} else if flags_mask == 0x10000 {
+				// animated sequence
+				let frames: Vec<Anim> = (0..num_frames)
 					.map(|_| {
 						let pixels = data.slice(frame_size);
 						Anim {
 							x: 0,
 							y: 0,
-							width: width as u16,
-							height: height as u16,
-							pixels: pixels.to_owned(),
+							width,
+							height,
+							pixels: pixels.to_vec(),
 						}
 					})
 					.collect();
-				save_anim(name, &anims, 24, output, pal);
-			}
+				save_anim(name, &frames, 30, output, pal);
+			} else {
+				// compressed animation
+				let base_pixels = data.slice(frame_size);
 
-			if flags_mask == 0x20000 {
-				assert!(data.u32() == 0);
-				let mut data =
-					data.resized(data.position()..(data.position() + 7108).min(data.len()));
-				let offsets = data.get_vec::<u32>(num_frames * 2);
-				let metadata_offsets = &offsets[..num_frames];
-				let pixel_offsets = &offsets[num_frames..];
-				for (i, (&meta_offset, &pixel_offset)) in
-					metadata_offsets.iter().zip(pixel_offsets).enumerate()
+				let mut frames: Vec<Anim> = Vec::with_capacity(num_frames + 1);
+				frames.push(Anim {
+					x: 0,
+					y: 0,
+					width,
+					height,
+					pixels: base_pixels.to_vec(),
+				});
+
+				let _runtime_anim_time = data.u32();
+
+				let mut data = data.resized(data.position()..); // offsets relative to here
+				let offsets = data.get_vec::<u32>(num_frames * 2); // run of meta offsets then run of pixels offsets
+				for (&metadata_offset, &pixel_offset) in
+					offsets[..num_frames].iter().zip(&offsets[num_frames..])
 				{
-					data.set_position(meta_offset as usize);
-					let meta = data.slice(pixel_offset as usize - meta_offset as usize);
-					let next_meta_offset = metadata_offsets
-						.get(i + 1)
-						.map(|n| *n as usize)
-						.unwrap_or(data.len());
-					debug_assert_eq!(data.position(), pixel_offset as usize);
-					let pixels = data.slice(next_meta_offset - pixel_offset as usize);
-					output.write(&format!("{name}_{i}_meta"), "", meta);
-					output.write(&format!("{name}_{i}_pixels"), "", pixels);
+					let mut meta = data.clone_at(metadata_offset as usize);
+					let mut src_pixels = data.clone_at(pixel_offset as usize);
+
+					let mut dest_pixels = frames.last().unwrap().pixels.clone();
+
+					let mut dest_pixel_offset = meta.u16() as usize * 4;
+					let num_chunks = meta.u16();
+
+					for _ in 0..num_chunks {
+						let chunk_size = meta.u8() as usize * 4;
+						let output_offset = meta.u8() as usize * 4;
+						dest_pixels[dest_pixel_offset..dest_pixel_offset + chunk_size]
+							.clone_from_slice(src_pixels.slice(chunk_size));
+						dest_pixel_offset += chunk_size + output_offset;
+					}
+
+					frames.push(Anim {
+						x: 0,
+						y: 0,
+						width,
+						height,
+						pixels: dest_pixels,
+					});
 				}
+
+				let last_frame = frames.pop().unwrap();
+				assert_eq!(
+					frames.first().unwrap().pixels,
+					last_frame.pixels,
+					"last frame didn't reset to first frame"
+				);
+
+				save_anim(name, &frames, 12, output, pal);
 			}
 		}
 	}

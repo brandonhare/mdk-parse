@@ -12,9 +12,14 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 mod cmi_bytecode;
-mod dti;
+mod data_formats;
+mod file_formats;
 mod gltf;
+mod named_vec;
 mod reader;
+use data_formats::Wav;
+use file_formats::{Dti, Sni};
+use named_vec::NamedVec;
 use reader::Reader;
 
 #[derive(Clone, Debug)]
@@ -123,7 +128,7 @@ impl<'a> Drop for DataFile<'a> {
 				continue;
 			}
 			if first {
-				println!("{}", self.0.display());
+				println!("{} ({:06X}..{:06X})", self.0.display(), 0, self.1.len());
 				first = false;
 			}
 			println!("  {start:06X}-{end:06X} ({len:7})");
@@ -146,6 +151,7 @@ fn read_file(path: &Path) -> DataFile {
 }
 
 #[derive(Default)]
+#[repr(transparent)]
 pub struct NoDebug<T>(T);
 impl<T> From<T> for NoDebug<T> {
 	fn from(value: T) -> Self {
@@ -199,98 +205,7 @@ fn get_bbox(points: &[Vec3]) -> [Vec3; 2] {
 	[min, max]
 }
 
-// puts the reader back to its initial position if the wav read fails
-fn try_read_wav<'a>(reader: &mut Reader<'a>) -> Option<&'a [u8]> {
-	let start_pos = reader.position();
-	if reader.try_slice(4) == Some(b"RIFF") {
-		if let Some(length) = reader.try_u32() {
-			if reader.try_slice(4) == Some(b"WAVE") {
-				reader.set_position(start_pos);
-				return reader.try_slice(length as usize + 8);
-			}
-		}
-	}
-	reader.set_position(start_pos);
-	None
-}
-
-fn parse_sni(path: &Path) {
-	let buf = read_file(path);
-	let filename = get_filename(path);
-	let mut reader = Reader::new(&buf);
-
-	let filesize = reader.u32() + 4;
-	assert_eq!(reader.len(), filesize as usize, "filesize does not match");
-
-	let name = reader.str(12);
-	let filesize2 = reader.u32();
-	assert_eq!(filesize, filesize2 + 12);
-
-	let num_entries = reader.u32();
-
-	let mut first_start = None;
-	let mut last_end = reader.position() + num_entries as usize * 24;
-
-	let mut output = OutputWriter::new(path);
-
-	for i in 0..num_entries {
-		let entry_name = reader.str(12);
-		let entry_type = reader.i32();
-		let start_offset = reader.u32() as usize + 4;
-		let mut file_size = reader.u32() as usize;
-
-		assert!(start_offset >= last_end, "overlapping files");
-		assert!(start_offset - last_end < 4, "unknown bytes between files");
-		first_start.get_or_insert(start_offset);
-
-		if file_size == 0xFFFFFFFF {
-			file_size = u32::from_le_bytes(buf[start_offset..start_offset + 4].try_into().unwrap())
-				as usize + 4;
-		}
-
-		assert!(start_offset + file_size > last_end, "shorter end");
-		last_end = start_offset + file_size;
-
-		let mut entry_reader = reader.resized(start_offset..start_offset + file_size);
-		if entry_type == -1 {
-			let anims = try_parse_anim(entry_reader.clone()).expect("failed to parse sni anim");
-			//assert_eq!(entry_reader.position(), file_size);
-			save_anim(
-				entry_name,
-				&anims,
-				24,
-				&mut output,
-				get_pal(filename, entry_name).as_deref(),
-			);
-		} else if entry_type == 0 {
-			let bsp = try_parse_bsp(&mut entry_reader).expect("failed to parse sni bsp");
-			assert_eq!(entry_reader.position(), file_size);
-			save_bsp(entry_name, &bsp, &mut output);
-		} else if let Some(wav) = try_read_wav(&mut entry_reader) {
-			output.write(entry_name, "wav", wav);
-		} else {
-			// todo what else is in entry_type
-			println!("unknown sni entry {entry_name}");
-			output.write(entry_name, "", entry_reader.remaining_slice());
-		}
-	}
-
-	assert_eq!(
-		first_start.unwrap(),
-		reader.position(),
-		"unknown bytes at start of file"
-	);
-	assert!(reader.position() <= last_end);
-	reader.set_position(last_end);
-	reader.align(4);
-	let filename2 = reader.str(12);
-	assert_eq!(name, filename2);
-	assert!(
-		reader.remaining_len() == 0,
-		"unknown bytes at end of file: {filename}"
-	);
-}
-
+#[derive(Debug)]
 struct Anim {
 	width: u16,
 	height: u16,
@@ -299,24 +214,27 @@ struct Anim {
 	pixels: Vec<u8>,
 }
 
-fn try_parse_anim(mut data: Reader) -> Option<Vec<Anim>> {
+fn try_parse_anim(reader: &mut Reader) -> Option<Vec<Anim>> {
+	let mut data = reader.clone();
 	let filesize = data.try_u32()? as usize;
-	data.resize(data.position()..data.len());
-	if filesize > data.len() {
+	if filesize > data.remaining_len() {
 		return None;
 	}
+	data.rebase_start();
 
-	let count = data.try_u32().filter(|n| *n <= 1000)?;
-	let offsets = data.try_get_vec::<u32>(count as usize)?;
+	let num_frames = data.try_u32()? as usize;
+	if num_frames > 1000 {
+		return None;
+	}
+	let mut results = Vec::with_capacity(num_frames);
 
-	let mut results = Vec::new();
-
-	for &o in &offsets {
-		let o = o as usize;
-		if o >= data.len() {
+	for _ in 0..num_frames {
+		let offset = data.try_u32()? as usize;
+		if offset >= data.remaining_len() {
 			return None;
 		}
-		data.set_position(o);
+		let mut data = data.clone_at(offset);
+
 		let width = data.try_u16()?;
 		let height = data.try_u16()?;
 		if width > 5000 || height > 5000 {
@@ -363,6 +281,9 @@ fn try_parse_anim(mut data: Reader) -> Option<Vec<Anim>> {
 			pixels,
 		});
 	}
+
+	// mark source reader as read
+	reader.skip(filesize + 4);
 
 	Some(results)
 }
@@ -659,8 +580,8 @@ fn parse_bni(path: &Path) {
 	for (i, &BniHeader { name, data }) in headers.iter().enumerate() {
 		// audio
 		let mut reader = Reader::new(data);
-		if let Some(wav) = try_read_wav(&mut reader) {
-			output.write(name, "wav", wav);
+		if let Some(wav) = Wav::try_parse(&mut reader) {
+			output.write(name, "wav", wav.file_data.0);
 			continue;
 		}
 
@@ -757,7 +678,7 @@ fn parse_bni(path: &Path) {
 			reader.set_position(pos);
 		}
 
-		if let Some(anims) = try_parse_anim(reader.clone()) {
+		if let Some(anims) = try_parse_anim(&mut reader) {
 			save_anim(
 				name,
 				&anims,
@@ -1043,8 +964,8 @@ fn parse_mto_subthing(arena_name: &str, buf: &[u8], output: &mut OutputWriter) {
 		let mut reader =
 			Reader::new(&buf[sound_offset as usize..sound_offset as usize + sound_length as usize]);
 
-		let data = try_read_wav(&mut reader).expect("invalid wav file!");
-		output.write(sound_name, "wav", data);
+		let wav = Wav::parse(&mut reader);
+		output.write(sound_name, "wav", wav.file_data.0);
 	}
 }
 
@@ -1075,6 +996,7 @@ struct BspPlane {
 	zeroes: [u32; 4],
 }
 
+#[derive(Debug)]
 struct Bsp<'a> {
 	planes: Vec<BspPlane>,
 	mesh: Mesh<'a>,
@@ -1709,19 +1631,15 @@ fn parse_fti(path: &Path) {
 	for (name, mut reader) in offsets {
 		match name {
 			"ARROW" => {
-				let anims = try_parse_anim(reader.clone());
-				save_anim(name, &anims.unwrap(), 24, &mut output, Some(pal));
+				let anims = try_parse_anim(&mut reader).unwrap();
+				save_anim(name, &anims, 24, &mut output, Some(pal));
 			}
 			"SYS_PAL" => {
 				let pixels = reader.slice(8 * 8 * 3);
 				save_pal(output.set_output_path(name, "png"), pixels);
 			}
 			"SND_PUSH" => {
-				output.write(
-					name,
-					"wav",
-					try_read_wav(&mut reader).expect("expected a wav file!"),
-				);
+				output.write(name, "wav", Wav::parse(&mut reader).file_data.0);
 			}
 			"F8" => {
 				let mut letter_pixels = [[0; 8 * 8]; 128];
@@ -1774,11 +1692,11 @@ fn parse_fti(path: &Path) {
 	output.write("strings", "txt", strings.as_bytes());
 }
 
-fn save_anim(name: &str, anims: &[Anim], fps: u16, output: &mut OutputWriter, pal: PalRef) {
-	assert!(!anims.is_empty());
+fn save_anim(name: &str, frames: &[Anim], fps: u16, output: &mut OutputWriter, pal: PalRef) {
+	assert!(!frames.is_empty());
 	output.set_output_path(name, "png");
-	if anims.len() == 1 {
-		let anim = &anims[0];
+	if frames.len() == 1 {
+		let anim = &frames[0];
 		save_png(
 			&output.path,
 			&anim.pixels,
@@ -1793,7 +1711,7 @@ fn save_anim(name: &str, anims: &[Anim], fps: u16, output: &mut OutputWriter, pa
 	let mut offset_y = 0;
 	let mut max_x = 0;
 	let mut max_y = 0;
-	for a in anims {
+	for a in frames {
 		offset_x = offset_x.max(a.x as isize);
 		offset_y = offset_y.max(a.y as isize);
 		max_x = max_x.max(a.width as isize - a.x as isize);
@@ -1804,12 +1722,12 @@ fn save_anim(name: &str, anims: &[Anim], fps: u16, output: &mut OutputWriter, pa
 	let height = (max_y + offset_y) as usize;
 
 	let mut encoder = setup_png(&output.path, width as u32, height as u32, pal);
-	encoder.set_animated(anims.len() as u32, 0).unwrap();
+	encoder.set_animated(frames.len() as u32, 0).unwrap();
 	encoder.set_sep_def_img(false).unwrap();
 	encoder.set_frame_delay(1, fps).unwrap();
 	let mut encoder = encoder.write_header().expect("failed to write png header");
 	let mut buffer = vec![0; width * height];
-	for anim in anims {
+	for anim in frames {
 		buffer.fill(0);
 		let offset_x = (offset_x - (anim.x as isize)) as usize;
 		for (a, b) in buffer
@@ -2422,12 +2340,18 @@ fn for_all_ext(path: impl AsRef<Path>, ext: &str, func: fn(&Path)) {
 	}
 }
 
-fn parse_and_save_dti(path: &Path) {
+fn parse_dti(path: &Path) {
 	let filename = get_filename(path);
 	let file = read_file(path);
-	let data = dti::Dti::parse(&file.1);
+	let data = Dti::parse(Reader::new(&file.1));
 	set_pal(filename, filename.split_once('.').unwrap().0, data.pal);
 	data.save(&mut OutputWriter::new(path));
+}
+fn parse_sni(path: &Path) {
+	let buf = read_file(path);
+	let filename = get_filename(path);
+	let sni = Sni::parse(Reader::new(&buf));
+	sni.save(&mut OutputWriter::new(path));
 }
 
 fn main() {
@@ -2436,15 +2360,15 @@ fn main() {
 
 	let start_time = std::time::Instant::now();
 
-	for_all_ext("assets", "dti", parse_and_save_dti);
+	for_all_ext("assets", "dti", parse_dti);
 	for_all_ext("assets", "bni", parse_bni);
 	for_all_ext("assets", "mto", parse_mto);
 	for_all_ext("assets", "sni", parse_sni);
 	for_all_ext("assets", "mti", parse_mti);
 	for_all_ext("assets", "cmi", parse_cmi);
 
-	//for_all_ext("assets", "lbb", parse_lbb);
 	//for_all_ext("assets", "fti", parse_fti);
+	//for_all_ext("assets", "lbb", parse_lbb);
 	//for_all_ext("assets", "flc", parse_video);
 	//for_all_ext("assets", "mve", parse_video);
 

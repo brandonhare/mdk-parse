@@ -67,8 +67,7 @@ pub enum DtiEntityData<'a> {
 
 impl<'a> Dti<'a> {
 	#[allow(clippy::field_reassign_with_default)]
-	pub fn parse(buffer: &[u8]) -> Dti {
-		let mut data = Reader::new(buffer);
+	pub fn parse(mut data: Reader) -> Dti {
 		let filesize = data.u32() + 4;
 		data.resize(4..);
 

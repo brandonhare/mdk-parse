@@ -85,6 +85,14 @@ impl<'buf> Reader<'buf> {
 		self.resize_pos(0..end_pos, self.position());
 	}
 
+	pub fn rebase_start(&mut self) {
+		self.resize(self.position()..);
+	}
+	#[must_use]
+	pub fn rebased_start(&self) -> Self {
+		self.resized(self.position()..)
+	}
+
 	pub fn buf(&self) -> &'buf [u8] {
 		self.reader.get_ref()
 	}
@@ -152,8 +160,8 @@ impl<'buf> Reader<'buf> {
 	}
 
 	#[must_use]
-	pub fn try_skip(&mut self, len: isize) -> Option<()> {
-		let end_pos = self.position().checked_add_signed(len)?;
+	pub fn try_skip(&mut self, len: usize) -> Option<()> {
+		let end_pos = self.position().checked_add(len)?;
 		if (0..=self.len()).contains(&end_pos) {
 			self.set_position(end_pos);
 			Some(())
@@ -161,7 +169,7 @@ impl<'buf> Reader<'buf> {
 			None
 		}
 	}
-	pub fn skip(&mut self, len: isize) {
+	pub fn skip(&mut self, len: usize) {
 		let start_pos = self.position();
 		let ok = self.try_skip(len).is_some();
 		assert!(
@@ -172,19 +180,21 @@ impl<'buf> Reader<'buf> {
 	}
 
 	pub fn try_align(&mut self, alignment: usize) -> Option<()> {
-		debug_assert!(alignment.is_power_of_two() && alignment > 0);
+		debug_assert!(alignment.is_power_of_two());
 		let pos = self.position();
 		let next_position = pos.next_multiple_of(alignment);
-		let remainder = next_position - pos;
-		if remainder > self.remaining_len() {
+
+		if next_position > self.len() {
 			return None;
 		}
-		if remainder != 0 {
-			self.mark_read(pos..pos + next_position);
-			self.try_skip(remainder as isize)
-		} else {
-			Some(())
+
+		if self.buf()[pos..next_position].iter().any(|b| *b != 0) {
+			return None;
 		}
+
+		self.mark_read(pos..next_position);
+		self.set_position(next_position);
+		Some(())
 	}
 	pub fn align(&mut self, alignment: usize) {
 		self.try_align(alignment).expect("failed to align");
@@ -195,7 +205,7 @@ impl<'buf> Reader<'buf> {
 	}
 	pub fn try_slice(&mut self, size: usize) -> Option<&'buf [u8]> {
 		let pos = self.position();
-		self.try_skip(size as isize)?;
+		self.try_skip(size)?;
 		self.mark_read(pos..pos + size);
 		Some(&self.buf()[pos..pos + size])
 	}

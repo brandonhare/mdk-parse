@@ -121,28 +121,37 @@ mod tests {
 	#[test]
 	fn test_writer() {
 		assert!(
-			!Path::new("output/testnodir").exists(),
+			!Path::new("output/test_no_dir").exists(),
 			"output test directory already exists before starting test"
 		);
 
-		let mut writer = OutputWriter::new("assets/testnodir/inputfile.txt", false);
+		let mut writer = OutputWriter::new("assets/test_no_dir/input_file.txt", false);
 		assert_eq!(
 			writer.path,
-			Path::new("output/testnodir/inputfile.txt/a"),
-			"output path not set properly"
-		);
-		assert!(
-			!Path::new("output/testnodir").exists(),
-			"should not have created a directory"
+			Path::new("output/test_no_dir/input_file.txt/_"),
+			"output not created properly"
 		);
 
 		assert_eq!(
-			writer.set_output_path("outputfile", "cool"),
-			Path::new("output/testnodir/inputfile.txt/outputfile.cool")
+			writer.set_output_path("output_file", "cool"),
+			Path::new("output/test_no_dir/input_file.txt/output_file.cool"),
+			"output path not set properly"
 		);
 		assert_eq!(
 			writer.path,
-			Path::new("output/testnodir/inputfile.txt/outputfile.cool")
+			Path::new("output/test_no_dir/input_file.txt/output_file.cool"),
+			"set_output_path did not motify internal path"
+		);
+
+		assert_eq!(
+			writer.set_output_path("output_no_ext", ""),
+			Path::new("output/test_no_dir/input_file.txt/output_no_ext"),
+			"output path not set without extension properly"
+		);
+
+		assert!(
+			!Path::new("output/test_no_dir").exists(),
+			"should not have created a directory"
 		);
 	}
 }

@@ -41,9 +41,9 @@ struct Teleport {
 #[derive(Debug)]
 pub struct DtiArena<'a> {
 	name: &'a str,
-	num: f32,
+	num: f32, // todo what is this
 	entities: Vec<DtiEntity<'a>>,
-	teleports: Vec<Teleport>,
+	teleports: Vec<Teleport>, // todo check these
 }
 
 #[derive(Debug)]
@@ -57,7 +57,7 @@ pub enum DtiEntityData<'a> {
 	ArenaShowZone,
 	Hotgen { name: &'a str, value: i32 },
 	ArenaActivateZone,
-	Hotpick(&'a str),
+	Hotpick(&'a str), // todo what are these
 	HidingSpot,
 	ArenaConnectZone(i32),
 	Fan,
@@ -114,7 +114,7 @@ impl<'a> Dti<'a> {
 			let num_arenas = data.u32();
 
 			let mut arenas = Vec::with_capacity(num_arenas as usize);
-			for arena_index in 0..num_arenas {
+			for _arena_index in 0..num_arenas {
 				let arena_name = data.str(8);
 				let arena_offset = data.u32();
 				let arena_num = data.f32();
@@ -124,7 +124,7 @@ impl<'a> Dti<'a> {
 				let mut entities = Vec::new();
 				entities.reserve_exact(num_entities);
 
-				for entity_index in 0..num_entities {
+				for _entity_index in 0..num_entities {
 					let kind = arena_data.i32();
 					let id = arena_data.i32();
 					let value = arena_data.i32();

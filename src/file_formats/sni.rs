@@ -24,7 +24,7 @@ impl<'a> Sni<'a> {
 		let mut anims = NamedVec::new();
 
 		let mut last_end = 0;
-		for i in 0..num_entries {
+		for _ in 0..num_entries {
 			let entry_name = reader.str(12);
 			let entry_type = reader.i32();
 			let entry_offset = reader.u32() as usize;

@@ -18,7 +18,7 @@ mod named_vec;
 mod output_writer;
 mod reader;
 use data_formats::{Bsp, Wav};
-use file_formats::{Dti, Sni};
+use file_formats::{Dti, Fti, Sni};
 use named_vec::NamedVec;
 use output_writer::OutputWriter;
 use reader::Reader;
@@ -522,11 +522,11 @@ fn parse_bni(path: &Path) {
 
 	let mut zooms = Vec::new();
 
-	for (i, &BniHeader { name, data }) in headers.iter().enumerate() {
+	for &BniHeader { name, data } in headers.iter() {
 		// audio
 		let mut reader = Reader::new(data);
 		if let Some(wav) = Wav::try_parse(&mut reader) {
-			output.write(name, "wav", wav.file_data.0);
+			output.write(name, "wav", wav.samples.0);
 			continue;
 		}
 
@@ -644,7 +644,7 @@ fn parse_bni(path: &Path) {
 			continue;
 		}
 
-		if let Some(anim) = try_parse_alienanim(name, reader.clone()) {
+		if let Some(anim) = try_parse_alienanim(reader.clone()) {
 			save_alienanim(name, &anim, &mut output);
 			continue;
 		}
@@ -869,8 +869,7 @@ fn parse_mto_subthing(arena_name: &str, buf: &[u8], output: &mut OutputWriter) {
 	// animations?
 	for (i, &(name, offset)) in animations.iter().enumerate() {
 		let end = all_offsets[all_offsets.iter().position(|o| *o == offset).unwrap() + 1];
-		let Some(anim) = try_parse_alienanim(name, data.resized(offset as usize..end as usize))
-		else {
+		let Some(anim) = try_parse_alienanim(data.resized(offset as usize..end as usize)) else {
 			eprintln!("failed to parse anim {i} {arena_name}/{name}");
 			output.write(name, "", &data.buf()[offset as usize..end as usize]);
 			continue;
@@ -902,7 +901,7 @@ fn parse_mto_subthing(arena_name: &str, buf: &[u8], output: &mut OutputWriter) {
 			Reader::new(&buf[sound_offset as usize..sound_offset as usize + sound_length as usize]);
 
 		let wav = Wav::parse(&mut reader);
-		output.write(sound_name, "wav", wav.file_data.0);
+		output.write(sound_name, "wav", wav.samples.0);
 	}
 }
 
@@ -936,7 +935,7 @@ impl<'a> AlienAnim<'a> {
 	}
 }
 
-fn try_parse_alienanim<'a>(name: &str, mut data: Reader<'a>) -> Option<AlienAnim<'a>> {
+fn try_parse_alienanim<'a>(mut data: Reader<'a>) -> Option<AlienAnim<'a>> {
 	let speed = data.try_f32()?;
 
 	data.resize(data.position()..);
@@ -1206,14 +1205,13 @@ fn read_path_data(mut reader: Reader) -> Vec<PathDataEntry> {
 
 fn parse_cmi(path: &Path) {
 	let buf = read_file(path);
-	let filename = get_filename(path);
 	let mut data = Reader::new(&buf);
 
 	let filesize = data.u32() + 4;
 	assert_eq!(data.len(), filesize as usize, "filesize does not match");
 	data.resize(4..);
 
-	let name = data.str(12);
+	let filename = data.str(12);
 	let filesize2 = data.u32();
 	assert_eq!(filesize, filesize2 + 12, "filesizes do not match");
 
@@ -1320,7 +1318,7 @@ fn parse_cmi(path: &Path) {
 		for &offset in anim_offsets.iter() {
 			let name = format!("{offset:06X}");
 			let anim_reader = data.resized(offset as usize..);
-			if let Some(anim) = try_parse_alienanim(&name, anim_reader) {
+			if let Some(anim) = try_parse_alienanim(anim_reader) {
 				save_alienanim(&name, &anim, &mut anim_output)
 			} else {
 				eprintln!("{filename}/{name} failed to parse alienanim at offset {offset:06X}");
@@ -1426,104 +1424,6 @@ fn save_font_grid(name: &str, letters: &[FontLetter], output: &mut OutputWriter,
 		&result,
 		pal,
 	)
-}
-
-fn parse_fti(path: &Path) {
-	let buf = read_file(path);
-	let filename = get_filename(path);
-	let mut data = Reader::new(&buf);
-
-	let filesize = data.u32() + 4;
-	assert_eq!(data.len(), filesize as usize, "filesize does not match");
-	data.resize(4..);
-
-	let mut output = OutputWriter::new(path, true);
-
-	let num_things = data.u32();
-	let mut offsets: Vec<_> = (0..num_things)
-		.map(|_| {
-			let name = data.str(8);
-			let offset = data.u32();
-			(name, data.clone_at(offset as usize))
-		})
-		.collect();
-
-	for i in 0..offsets.len().saturating_sub(1) {
-		let next_start_pos = offsets[i + 1].1.position();
-		offsets[i].1.set_end(next_start_pos);
-	}
-
-	let pal = offsets
-		.iter()
-		.find(|(name, _)| *name == "SYS_PAL")
-		.unwrap()
-		.1
-		.clone()
-		.remaining_slice();
-
-	let mut strings = String::new();
-	for (name, mut reader) in offsets {
-		match name {
-			"ARROW" => {
-				let anims = try_parse_anim(&mut reader).unwrap();
-				save_anim(name, &anims, 24, &mut output, Some(pal));
-			}
-			"SYS_PAL" => {
-				let pixels = reader.slice(8 * 8 * 3);
-				output.write_palette(name, pixels);
-			}
-			"SND_PUSH" => {
-				output.write(name, "wav", Wav::parse(&mut reader).file_data.0);
-			}
-			"F8" => {
-				let mut letter_pixels = [[0; 8 * 8]; 128];
-				let letters: Vec<FontLetter> = letter_pixels
-					.iter_mut()
-					.enumerate()
-					.map(|(i, pixels)| {
-						for row in pixels.chunks_exact_mut(8) {
-							let mut b = reader.u8();
-							for p in row {
-								if b & 0x80 != 0 {
-									*p = 1;
-								}
-								b <<= 1;
-							}
-						}
-						FontLetter {
-							code: i as u8,
-							width: 8,
-							height: 8,
-							pixels,
-						}
-					})
-					.collect();
-
-				save_font_grid(name, &letters, &mut output, Some(pal));
-			}
-			"FONTBIG" | "FONTSML" => {
-				let font_letters = parse_font_letters(reader.resized(reader.position()..));
-				save_font_grid(name, &font_letters, &mut output, Some(pal));
-			}
-			_ => {
-				write!(strings, "{name:8}\t").unwrap();
-				loop {
-					let c = reader.u8();
-					match c {
-						0 => break,
-						b' '..=b'~' => strings.push(c as char),
-						b'\t' => strings.push_str("\\t"),
-						149 => strings.push('ę'),
-						150 => strings.push('ń'),
-						230 => strings.push('ć'),
-						_ => panic!("{name}: unknown charcode {c}"),
-					}
-				}
-				strings.push('\n');
-			}
-		}
-	}
-	output.write("strings", "txt", strings.as_bytes());
 }
 
 fn save_anim(name: &str, frames: &[Anim], fps: u16, output: &mut OutputWriter, palette: PalRef) {
@@ -1666,7 +1566,7 @@ fn try_parse_mesh<'a>(data: &mut Reader<'a>, read_textures: bool) -> Option<Mesh
 			return None;
 		};
 		let mut textures = Vec::with_capacity(num_textures);
-		for i in 0..num_textures {
+		for _ in 0..num_textures {
 			textures.push(data.try_str(16)?);
 		}
 		textures
@@ -1719,7 +1619,7 @@ fn try_parse_multimesh<'a>(data: &mut Reader<'a>) -> Option<Multimesh<'a>> {
 		return None;
 	};
 	let mut textures = Vec::with_capacity(num_textures);
-	for i in 0..num_textures {
+	for _ in 0..num_textures {
 		textures.push(data.try_str(16)?.to_owned());
 	}
 
@@ -1728,7 +1628,7 @@ fn try_parse_multimesh<'a>(data: &mut Reader<'a>) -> Option<Multimesh<'a>> {
 	if num_submeshes > 1000 {
 		return None;
 	}
-	for i in 0..num_submeshes {
+	for _ in 0..num_submeshes {
 		let name = data.try_str(12)?;
 		let origin = swizzle(data.try_vec3()?);
 		let mut mesh = try_parse_mesh(data, false)?;
@@ -1842,8 +1742,8 @@ fn add_mesh_to_gltf(
 		} // else might be a line
 
 		for i in (0..3).rev() {
-			let index = tri.indices[i];
-			let mut uv = tri.uvs[i];
+			let index = indices[i];
+			let mut uv = uvs[i];
 
 			if let Some(img) = &split_mesh.image {
 				uv[0] /= img.width as f32;
@@ -2059,9 +1959,13 @@ fn parse_dti(path: &Path) {
 }
 fn parse_sni(path: &Path) {
 	let buf = read_file(path);
-	let filename = get_filename(path);
 	let sni = Sni::parse(Reader::new(&buf));
 	sni.save(&mut OutputWriter::new(path, true));
+}
+fn parse_fti(path: &Path) {
+	let buf = read_file(path);
+	let fti = Fti::parse(Reader::new(&buf));
+	fti.save(&mut OutputWriter::new(path, true));
 }
 
 fn main() {

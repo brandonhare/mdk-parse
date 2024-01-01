@@ -327,7 +327,8 @@ pub fn parse_cmi(
 			w!("[{cmd_offset:06X}: {cmd:02X} ");
 
 			match cmd {
-				0x0 | 0x7 | 0x1E => {
+				0x0 | 0x7 | 0x1E | 0xFE | 0xFF => {
+					eprintln!("invalid opcode in {filename}/{name} ({cmd_offset:06X})!");
 					wl!("Invalid!]");
 					break;
 				}
@@ -340,9 +341,16 @@ pub fn parse_cmi(
 					let value1 = reader.u8();
 					let value2 = reader.u8();
 					let value3 = reader.u16();
-					let rest = reader.u8();
-					let vec = if rest == 0 { reader.vec3() } else { [0.0; 3] };
-					wl!("Set path] v1: {value1}, v2: {value2}, v3: {value3}, rest: {rest}, vec: {vec:?}, path offset: {path_offset:06X}");
+					let vec = match reader.u8() {
+						0 => Some(reader.vec3()),
+						1 => None,
+						n => {
+							eprint!("cmi opcode 0x02 unknown vec param {n} in {filename}/{name} ({cmd_offset:06X})");
+							None
+						}
+					};
+					// todo what are all these
+					wl!("Set path] v1: {value1}, v2: {value2}, v3: {value3}, vec: {vec:?}, path offset: {path_offset:06X}");
 				}
 				0x03 => {
 					let anim_offset = reader.u32();
@@ -1656,7 +1664,7 @@ pub fn parse_cmi(
 					let y = reader.f32();
 					let z = reader.f32();
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Target fire] y: {y}, z: {z}");
+					wl!("Target fire] y: {y}, z: {z}, target: {branch}");
 				}
 				0xDC => {
 					let pos = reader.vec3();
@@ -1756,7 +1764,10 @@ pub fn parse_cmi(
 				0xEE => {
 					let component = match reader.u8() {
 						n if n < 3 => (b'x' + n) as char,
-						n => '?',
+						n => {
+							eprintln!("invalid opcode 0xEE component {n}");
+							'?'
+						}
 					};
 					let comp = compare(reader);
 					let branch = branch_code(&mut blocks, reader);
@@ -1891,10 +1902,6 @@ pub fn parse_cmi(
 				}
 				0xFD => {
 					wl!("Return]");
-				}
-				n => {
-					wl!("?]");
-					break;
 				}
 			}
 		}

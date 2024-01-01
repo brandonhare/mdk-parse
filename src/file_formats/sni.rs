@@ -1,7 +1,5 @@
 use crate::reader::Reader;
-use crate::{
-	save_anim, save_bsp, try_parse_anim, try_parse_bsp, Anim, Bsp, NamedVec, OutputWriter, Wav,
-};
+use crate::{save_anim, try_parse_anim, Anim, Bsp, NamedVec, OutputWriter, Wav};
 
 #[derive(Debug)]
 pub struct Sni<'a> {
@@ -43,7 +41,7 @@ impl<'a> Sni<'a> {
 				let anim = try_parse_anim(&mut entry_reader).expect("failed to parse sni anim");
 				anims.insert(entry_name, anim);
 			} else if entry_type == 0 {
-				let bsp = try_parse_bsp(&mut entry_reader).expect("failed to parse sni bsp");
+				let bsp = Bsp::parse(&mut entry_reader);
 				bsps.insert(entry_name, bsp);
 			} else {
 				// todo entry_type values
@@ -69,7 +67,7 @@ impl<'a> Sni<'a> {
 			sound.save_as(name, output);
 		}
 		for (name, bsp) in self.bsps.iter() {
-			save_bsp(name, bsp, output);
+			bsp.save_as(name, output);
 		}
 		for (name, anim) in self.anims.iter() {
 			save_anim(name, anim, 30, output, None);

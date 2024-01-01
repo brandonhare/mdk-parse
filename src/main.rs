@@ -17,7 +17,7 @@ mod gltf;
 mod named_vec;
 mod output_writer;
 mod reader;
-use data_formats::Wav;
+use data_formats::{Bsp, Wav};
 use file_formats::{Dti, Sni};
 use named_vec::NamedVec;
 use output_writer::OutputWriter;
@@ -128,6 +128,10 @@ fn swizzle_slice(points: &mut [Vec3]) {
 	for point in points {
 		*point = swizzle(*point);
 	}
+}
+fn swizzle_vec(mut vec: Vec<Vec3>) -> Vec<Vec3> {
+	swizzle_slice(&mut vec);
+	vec
 }
 
 fn add_vec<T: std::ops::Add<Output = T>, const N: usize>(lhs: [T; N], rhs: [T; N]) -> [T; N] {
@@ -820,8 +824,8 @@ fn parse_mto(path: &Path) {
 		{
 			// parse bsp
 			asset_reader.set_position(bsp_offset);
-			let bsp = parse_bsp(&mut asset_reader);
-			save_bsp(arena_name, &bsp, &mut output);
+			let bsp = Bsp::parse(&mut asset_reader);
+			bsp.save_as(arena_name, &mut output);
 		}
 
 		{
@@ -916,105 +920,6 @@ struct Multimesh<'a> {
 	reference_points: Vec<Vec3>,
 }
 
-#[derive(Debug)]
-struct BspPlane {
-	normal: Vec3,
-	dist: f32,
-	plane_index_behind: i16,
-	plane_index_front: i16,
-	tris_front_count: u16,
-	tris_front_index: u16,
-	tris_back_count: u16,
-	tris_back_index: u16,
-	zeroes: [u32; 4],
-}
-
-#[derive(Debug)]
-struct Bsp<'a> {
-	planes: Vec<BspPlane>,
-	mesh: Mesh<'a>,
-}
-
-fn try_parse_bsp<'a>(data: &mut Reader<'a>) -> Option<Bsp<'a>> {
-	let num_materials = data.try_u32()?;
-	if num_materials > 500 {
-		return None;
-	}
-	let textures = (0..num_materials)
-		.map(|_| data.try_str(10))
-		.collect::<Option<Vec<&str>>>()?;
-	data.try_align(4)?;
-
-	let num_planes = data.try_u32()? as usize;
-	if num_planes > 10000 {
-		return None;
-	}
-	let mut planes = Vec::with_capacity(num_planes);
-	for _ in 0..num_planes {
-		let result = BspPlane {
-			normal: data.try_vec3()?,
-			dist: data.try_f32()?,
-			plane_index_behind: data.try_i16()?,
-			plane_index_front: data.try_i16()?,
-			tris_front_count: data.try_u16()?,
-			tris_front_index: data.try_u16()?,
-			tris_back_count: data.try_u16()?,
-			tris_back_index: data.try_u16()?,
-			zeroes: data.try_get()?,
-		};
-		if result.plane_index_behind < -1
-			|| result.plane_index_behind as isize > num_planes as isize
-			|| result.plane_index_front < -1
-			|| result.plane_index_front as isize > num_planes as isize
-		{
-			return None;
-		}
-
-		if (result.normal.iter().map(|f| f * f).sum::<f32>() - 1.0).abs() > 0.0001 {
-			return None;
-		}
-		if result.zeroes != [0; 4] {
-			return None;
-		}
-		planes.push(result);
-	}
-
-	let num_tris = data.try_u32()? as usize;
-	let tris = try_parse_mesh_tris(data, num_tris)?;
-
-	let num_verts = data.try_u32()? as usize;
-	if num_verts > 10000 {
-		return None;
-	}
-	let mut verts = data.try_get_vec::<Vec3>(num_verts)?;
-	swizzle_slice(&mut verts);
-
-	let num_things = data.try_u32()?;
-	if num_things > 10000 {
-		return None;
-	}
-	let things = data.try_slice(num_things as usize)?;
-	if things.iter().any(|c| *c != 255) {
-		return None;
-	}
-	//assert_eq!(data.position(), data.len());
-
-	Some(Bsp {
-		planes,
-		mesh: Mesh {
-			textures,
-			bbox: get_bbox(&verts),
-			verts,
-			tris,
-			reference_points: Vec::new(),
-		},
-	})
-}
-
-fn parse_bsp<'a>(data: &mut Reader<'a>) -> Bsp<'a> {
-	try_parse_bsp(data).expect("failed to parse bsp!")
-}
-
 struct AlienAnim<'a> {
 	speed: f32,
 	target_vectors: Vec<Vec3>, // todo what exactly are these?
@@ -1047,8 +952,7 @@ fn try_parse_alienanim<'a>(name: &str, mut data: Reader<'a>) -> Option<AlienAnim
 		return None;
 	}
 
-	let mut target_vectors = data.try_get_vec::<Vec3>(num_frames)?;
-	swizzle_slice(&mut target_vectors);
+	let mut target_vectors = swizzle_vec(data.try_get_vec::<Vec3>(num_frames)?);
 	for i in 1..target_vectors.len() {
 		// todo added in gameplay
 		target_vectors[i] = add_vec(target_vectors[i], target_vectors[i - 1]);
@@ -1060,9 +964,8 @@ fn try_parse_alienanim<'a>(name: &str, mut data: Reader<'a>) -> Option<AlienAnim
 	}
 	let mut reference_points: Vec<Vec<Vec3>> = Vec::with_capacity(num_reference_points);
 	for _ in 0..num_reference_points {
-		let mut path = data.try_get_vec::<Vec3>(num_frames)?;
-		swizzle_slice(&mut path);
-		reference_points.push(path);
+		let points_path = swizzle_vec(data.try_get_vec::<Vec3>(num_frames)?);
+		reference_points.push(points_path);
 	}
 
 	let mut parts = Vec::with_capacity(num_parts);
@@ -1679,85 +1582,6 @@ fn save_anim(name: &str, frames: &[Anim], fps: u16, output: &mut OutputWriter, p
 	encoder.finish().expect("failed to write png file");
 }
 
-fn save_bsp_debug(name: &str, bsp: &Bsp, output: &mut OutputWriter) {
-	let mut gltf = gltf::Gltf::new(name.to_owned());
-
-	fn recurse(
-		gltf: &mut gltf::Gltf, temp_mesh: &mut Mesh, bsp: &Bsp, index: usize, node: gltf::NodeIndex,
-	) {
-		let plane = &bsp.planes[index];
-
-		let front_index = plane.plane_index_front;
-		if front_index >= 0 {
-			let right_node = gltf.create_child_node(node, format!("front_{front_index}"), None);
-			recurse(gltf, temp_mesh, bsp, front_index as usize, right_node);
-		}
-
-		temp_mesh.tris.clear();
-		for i in 0..plane.tris_front_count {
-			let tri = &bsp.mesh.tris[(plane.tris_front_index + i) as usize];
-			if tri.indices[0] == tri.indices[1] && tri.indices[0] == tri.indices[2] {
-				continue;
-			}
-			temp_mesh.tris.push(tri.clone());
-		}
-		for i in 0..plane.tris_back_count {
-			let tri = &bsp.mesh.tris[(plane.tris_back_index + i) as usize];
-			if tri.indices[0] == tri.indices[1] && tri.indices[0] == tri.indices[2] {
-				continue;
-			}
-			temp_mesh.tris.push(tri.clone());
-		}
-
-		if !temp_mesh.tris.is_empty() {
-			let mesh_node = gltf.create_child_node(node, format!("mesh_{index}"), None);
-			add_mesh_to_gltf(gltf, format!("{index}"), temp_mesh, &[], Some(mesh_node));
-
-			let flags_summary: Vec<_> = temp_mesh
-				.tris
-				.iter()
-				.enumerate()
-				.filter(|(_,t)| t.flags != 0)
-				.map(
-					|(i,t)| serde_json::json!({"index": i, "id": t.id(), "outlines": t.outlines(), "flags": t.flags & 0x008F_FFFF}),
-				)
-				.collect();
-			gltf.set_node_extras(mesh_node, "flags", flags_summary);
-		}
-
-		let behind_index = plane.plane_index_behind;
-		if behind_index >= 0 {
-			let left_node = gltf.create_child_node(node, format!("behind_{behind_index}"), None);
-			recurse(gltf, temp_mesh, bsp, behind_index as usize, left_node);
-		}
-	}
-
-	let node = gltf.get_root_node();
-	recurse(&mut gltf, &mut bsp.mesh.clone(), bsp, 0, node);
-
-	gltf.combine_buffers();
-	output.write(
-		name,
-		"debug.gltf",
-		serde_json::to_string(&gltf).unwrap().as_bytes(),
-	);
-}
-
-fn save_bsp(name: &str, bsp: &Bsp, output: &mut OutputWriter) {
-	let mut gltf = gltf::Gltf::new(name.to_owned());
-	let root = gltf.get_root_node();
-	add_mesh_to_gltf(&mut gltf, name.to_owned(), &bsp.mesh, &[], Some(root));
-
-	gltf.combine_buffers();
-	output.write(
-		name,
-		"gltf",
-		serde_json::to_string(&gltf).unwrap().as_bytes(),
-	);
-
-	//save_bsp_debug(name, bsp, output);
-}
-
 #[derive(Clone)]
 struct MeshTri {
 	indices: [u16; 3],
@@ -1854,8 +1678,7 @@ fn try_parse_mesh<'a>(data: &mut Reader<'a>, read_textures: bool) -> Option<Mesh
 	if num_verts > 10000 {
 		return None;
 	}
-	let mut verts = data.try_get_vec::<Vec3>(num_verts)?;
-	swizzle_slice(&mut verts);
+	let verts = swizzle_vec(data.try_get_vec::<Vec3>(num_verts)?);
 
 	let num_tris = data.try_u32()? as usize;
 	if num_tris > 10000 {
@@ -1874,13 +1697,12 @@ fn try_parse_mesh<'a>(data: &mut Reader<'a>, read_textures: bool) -> Option<Mesh
 		swizzle([max_x, max_y, max_z]),
 	];
 
-	let mut reference_points = if read_textures {
+	let reference_points = if read_textures {
 		let num_reference_points = data.try_u32()?;
-		data.try_get_vec(num_reference_points as usize)?
+		swizzle_vec(data.try_get_vec(num_reference_points as usize)?)
 	} else {
 		Default::default()
 	};
-	swizzle_slice(&mut reference_points);
 
 	Some(Mesh {
 		textures,
@@ -1929,8 +1751,7 @@ fn try_parse_multimesh<'a>(data: &mut Reader<'a>) -> Option<Multimesh<'a>> {
 	];
 
 	let num_reference_points = data.try_u32()?;
-	let mut reference_points = data.try_get_vec::<Vec3>(num_reference_points as usize)?;
-	swizzle_slice(&mut reference_points);
+	let reference_points = swizzle_vec(data.try_get_vec::<Vec3>(num_reference_points as usize)?);
 
 	Some(Multimesh {
 		textures,

@@ -66,7 +66,8 @@ impl<'a> Bsp<'a> {
 		let num_things = data.u32();
 		assert!(num_things < 10000);
 		let things = data.slice(num_things as usize);
-		assert!(things.iter().all(|c| *c == 255));
+		assert!(things.iter().all(|c| *c == 255)); // todo what are these?
+
 		//assert_eq!(data.position(), data.len());
 
 		Bsp {

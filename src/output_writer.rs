@@ -61,6 +61,7 @@ impl OutputWriter {
 		save_pal(self.set_output_path(asset_name, "png"), pixels.as_ref())
 	}
 
+	#[must_use]
 	pub fn start_animated_png(
 		&mut self, asset_name: &str, width: u32, height: u32, fps: u16, num_frames: u32,
 		palette: Option<&[u8]>,

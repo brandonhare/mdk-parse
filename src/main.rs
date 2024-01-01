@@ -14,12 +14,10 @@ mod cmi_bytecode;
 mod data_formats;
 mod file_formats;
 mod gltf;
-mod named_vec;
 mod output_writer;
 mod reader;
 use data_formats::{Bsp, Wav};
-use file_formats::{Dti, Fti, Sni};
-use named_vec::NamedVec;
+use file_formats::{Dti, Fti, Mti, Sni};
 use output_writer::OutputWriter;
 use reader::Reader;
 
@@ -232,174 +230,6 @@ fn try_parse_anim(reader: &mut Reader) -> Option<Vec<Anim>> {
 	reader.skip(filesize + 4);
 
 	Some(results)
-}
-
-fn parse_mti(path: &Path) {
-	let buf = read_file(path);
-
-	let filename = path.file_name().unwrap().to_str().unwrap();
-
-	let pal = get_pal(filename, "");
-
-	let mut output = OutputWriter::new(path, true);
-	parse_mti_data(&mut output, &buf, pal.as_deref())
-}
-fn parse_mti_data(output: &mut OutputWriter, buf: &[u8], pal: PalRef) {
-	let mut reader = Reader::new(buf);
-	let filesize = reader.u32() + 4;
-	assert_eq!(reader.len(), filesize as usize, "filesize does not match");
-	reader.resize(4..);
-
-	let filename = reader.str(12);
-	let filesize2 = reader.u32();
-	assert_eq!(filesize, filesize2 + 12, "filesizes do not match");
-	let num_entries = reader.u32();
-
-	let mut pen_entries = Vec::new();
-
-	for _ in 0..num_entries {
-		let name = reader.str(8);
-		let flags = reader.u32();
-
-		if flags == 0xFFFFFFFF {
-			// pen
-			let pen_value = reader.i32();
-			let _ = reader.u32(); // padding
-			let _ = reader.u32();
-			pen_entries.push((name, pen_value));
-		} else {
-			// texture
-			let a = reader.f32(); // todo what is this
-			let b = reader.f32(); // todo what is this
-			let start_offset = reader.u32() as usize;
-			let mut data = reader.clone_at(start_offset);
-
-			let flags_mask = flags & 0x30000; // if the texture is animated or not
-			let flags_rest = flags & !0x30000; // todo what are these
-
-			assert_ne!(
-				flags_mask, 0x30000,
-				"unknown mti flags combination ({flags:X}) on {name}"
-			);
-
-			let num_frames = if flags_mask != 0 {
-				data.u32() as usize
-			} else {
-				1
-			};
-			let width = data.u16();
-			let height = data.u16();
-			let frame_size = width as usize * height as usize;
-
-			if num_frames == 1 {
-				let pixels = data.slice(frame_size);
-				output.write_png(name, width as u32, height as u32, pixels, pal);
-			} else if flags_mask == 0x10000 {
-				// animated sequence
-				let frames: Vec<Anim> = (0..num_frames)
-					.map(|_| {
-						let pixels = data.slice(frame_size);
-						Anim {
-							x: 0,
-							y: 0,
-							width,
-							height,
-							pixels: pixels.to_vec(),
-						}
-					})
-					.collect();
-				save_anim(name, &frames, 30, output, pal);
-			} else {
-				// compressed animation
-				let base_pixels = data.slice(frame_size);
-
-				let mut frames: Vec<Anim> = Vec::with_capacity(num_frames + 1);
-				frames.push(Anim {
-					x: 0,
-					y: 0,
-					width,
-					height,
-					pixels: base_pixels.to_vec(),
-				});
-
-				let _runtime_anim_time = data.u32();
-
-				let mut data = data.resized(data.position()..); // offsets relative to here
-				let offsets = data.get_vec::<u32>(num_frames * 2); // run of meta offsets then run of pixels offsets
-				for (&metadata_offset, &pixel_offset) in
-					offsets[..num_frames].iter().zip(&offsets[num_frames..])
-				{
-					let mut meta = data.clone_at(metadata_offset as usize);
-					let mut src_pixels = data.clone_at(pixel_offset as usize);
-
-					let mut dest_pixels = frames.last().unwrap().pixels.clone();
-
-					let mut dest_pixel_offset = meta.u16() as usize * 4;
-					let num_chunks = meta.u16();
-
-					for _ in 0..num_chunks {
-						let chunk_size = meta.u8() as usize * 4;
-						let output_offset = meta.u8() as usize * 4;
-						dest_pixels[dest_pixel_offset..dest_pixel_offset + chunk_size]
-							.clone_from_slice(src_pixels.slice(chunk_size));
-						dest_pixel_offset += chunk_size + output_offset;
-					}
-
-					frames.push(Anim {
-						x: 0,
-						y: 0,
-						width,
-						height,
-						pixels: dest_pixels,
-					});
-				}
-
-				let last_frame = frames.pop().unwrap();
-				assert_eq!(
-					frames.first().unwrap().pixels,
-					last_frame.pixels,
-					"last frame didn't reset to first frame"
-				);
-
-				save_anim(name, &frames, 12, output, pal);
-			}
-
-			// print summary
-			let mut summary = String::new();
-			if a != 0.0 {
-				writeln!(summary, "a: {a}").unwrap();
-			}
-			if b != 3.5 {
-				writeln!(summary, "b: {b}").unwrap();
-			}
-			if flags_rest != 0 {
-				writeln!(summary, "flags: {flags_rest:X}").unwrap();
-			}
-			if !summary.is_empty() {
-				output.write(name, "txt", summary.as_bytes());
-			}
-		}
-	}
-
-	if !pen_entries.is_empty() {
-		output.write(
-			"pens",
-			"txt",
-			String::from_iter(
-				pen_entries
-					.iter()
-					.map(|(name, id)| format!("{name:8}: {id}\n")),
-			)
-			.as_bytes(),
-		);
-	}
-
-	reader.set_position(reader.len() - 12);
-	let footer_name = reader.str(12);
-	assert_eq!(
-		filename, footer_name,
-		"mti had mismatched header and footer names"
-	);
 }
 
 thread_local! {
@@ -796,9 +626,7 @@ fn parse_mto(path: &Path) {
 		let pal_offset = asset_reader.u32() as usize;
 		let bsp_offset = asset_reader.u32() as usize;
 
-		let matfile_len = asset_reader.u32() as usize;
-		let matfile_name = asset_reader.str(12);
-		let matfile_data = &asset_reader.buf()[12..8 + matfile_len + 8];
+		let matfile_offset = asset_reader.position();
 
 		{
 			// parse subfile
@@ -830,11 +658,10 @@ fn parse_mto(path: &Path) {
 
 		{
 			// output matfile
-			parse_mti_data(
-				&mut output,
-				matfile_data,
-				get_pal(arena_name, arena_name).as_deref(),
-			);
+			asset_reader.set_position(matfile_offset);
+			let mti = Mti::parse(&mut asset_reader);
+			let pal = get_pal(arena_name, arena_name);
+			mti.save(&mut output, pal.as_deref());
 		}
 	}
 }
@@ -935,7 +762,7 @@ impl<'a> AlienAnim<'a> {
 	}
 }
 
-fn try_parse_alienanim<'a>(mut data: Reader<'a>) -> Option<AlienAnim<'a>> {
+fn try_parse_alienanim(mut data: Reader<'_>) -> Option<AlienAnim<'_>> {
 	let speed = data.try_f32()?;
 
 	data.resize(data.position()..);
@@ -1953,18 +1780,27 @@ fn for_all_ext(path: impl AsRef<Path>, ext: &str, func: fn(&Path)) {
 fn parse_dti(path: &Path) {
 	let filename = get_filename(path);
 	let file = read_file(path);
-	let data = Dti::parse(Reader::new(&file.1));
-	set_pal(filename, filename.split_once('.').unwrap().0, data.pal);
-	data.save(&mut OutputWriter::new(path, true));
+	let dti = Dti::parse(Reader::new(&file));
+	set_pal(filename, filename.split_once('.').unwrap().0, dti.pal);
+	dti.save(&mut OutputWriter::new(path, true));
 }
 fn parse_sni(path: &Path) {
-	let buf = read_file(path);
-	let sni = Sni::parse(Reader::new(&buf));
+	let file = read_file(path);
+	let sni = Sni::parse(Reader::new(&file));
 	sni.save(&mut OutputWriter::new(path, true));
 }
+
+fn parse_mti(path: &Path) {
+	let filename = get_filename(path);
+	let file = read_file(path);
+	let mti = Mti::parse(&mut Reader::new(&file));
+	let pal = get_pal(filename, "");
+	mti.save(&mut OutputWriter::new(path, true), pal.as_deref());
+}
+
 fn parse_fti(path: &Path) {
-	let buf = read_file(path);
-	let fti = Fti::parse(Reader::new(&buf));
+	let file = read_file(path);
+	let fti = Fti::parse(Reader::new(&file));
 	fti.save(&mut OutputWriter::new(path, true));
 }
 

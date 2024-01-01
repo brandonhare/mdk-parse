@@ -1,11 +1,11 @@
 use crate::reader::Reader;
-use crate::{save_anim, try_parse_anim, Anim, Bsp, NamedVec, OutputWriter, Wav};
+use crate::{save_anim, try_parse_anim, Anim, Bsp, OutputWriter, Wav};
 
 #[derive(Debug)]
 pub struct Sni<'a> {
-	pub sounds: NamedVec<'a, Wav<'a>>,
-	pub bsps: NamedVec<'a, Bsp<'a>>,
-	pub anims: NamedVec<'a, Vec<Anim>>,
+	pub sounds: Vec<(&'a str, Wav<'a>, i32)>,
+	pub bsps: Vec<(&'a str, Bsp<'a>)>,
+	pub anims: Vec<(&'a str, Vec<Anim>)>,
 }
 
 impl<'a> Sni<'a> {
@@ -19,9 +19,9 @@ impl<'a> Sni<'a> {
 		assert_eq!(filesize, filesize2 + 12);
 		let num_entries = reader.u32();
 
-		let mut sounds = NamedVec::new();
-		let mut bsps = NamedVec::new();
-		let mut anims = NamedVec::new();
+		let mut sounds = Vec::new();
+		let mut bsps = Vec::new();
+		let mut anims = Vec::new();
 
 		let mut last_end = 0;
 		for _ in 0..num_entries {
@@ -39,14 +39,13 @@ impl<'a> Sni<'a> {
 
 			if entry_type == -1 {
 				let anim = try_parse_anim(&mut entry_reader).expect("failed to parse sni anim");
-				anims.insert(entry_name, anim);
+				anims.push((entry_name, anim));
 			} else if entry_type == 0 {
 				let bsp = Bsp::parse(&mut entry_reader);
-				bsps.insert(entry_name, bsp);
+				bsps.push((entry_name, bsp));
 			} else {
-				// todo entry_type values
 				let wav = Wav::parse(&mut entry_reader);
-				sounds.insert(entry_name, wav);
+				sounds.push((entry_name, wav, entry_type));
 			}
 		}
 
@@ -63,9 +62,24 @@ impl<'a> Sni<'a> {
 	}
 
 	pub fn save(&self, output: &mut OutputWriter) {
-		for (name, sound) in self.sounds.iter() {
+		let mut sound_summary =
+			String::from("name\tchannels\tsample rate\tbit depth\tduration (s)\tentry type\n");
+		for (name, sound, entry_type) in self.sounds.iter() {
 			sound.save_as(name, output);
+
+			use std::fmt::Write;
+			writeln!(
+				sound_summary,
+				"{name}\t{}\t{}\t{}\t{}\t{entry_type:X}",
+				sound.num_channels,
+				sound.samples_per_second,
+				sound.bits_per_sample,
+				sound.duration_secs
+			)
+			.unwrap();
 		}
+		output.write("sounds", "tsv", &sound_summary);
+
 		for (name, bsp) in self.bsps.iter() {
 			bsp.save_as(name, output);
 		}

@@ -239,9 +239,9 @@ impl<'a> Dti<'a> {
 		output.write_palette("palette", self.pal);
 		output.write_png(
 			"skybox",
-			&self.sky.pixels,
 			self.sky.src_width,
 			self.sky.src_height,
+			self.sky.pixels.0,
 			Some(self.pal),
 		);
 

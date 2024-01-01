@@ -1,4 +1,4 @@
-use crate::Reader;
+use crate::{Reader, Vec3};
 
 use std::fmt::Write;
 
@@ -1084,7 +1084,7 @@ pub fn parse_cmi(
 					let pos = if point_index == 0xFF {
 						reader.vec3()
 					} else {
-						[0.0; 3]
+						Vec3::default()
 					};
 					if value1 < 150 {
 						if point_index == 0xFF {
@@ -1280,11 +1280,11 @@ pub fn parse_cmi(
 				0x9F => {
 					let value1 = reader.u8();
 					let pos1 = match value1 {
-						0 => [0.0; 3],
+						0 => Vec3::default(),
 						1 | 2 => reader.vec3(),
 						n => {
 							println!("invalid 0x9f opcode {n}");
-							[0.0; 3]
+							Vec3::default()
 						}
 					};
 					let pos2 = reader.vec3();
@@ -1399,7 +1399,7 @@ pub fn parse_cmi(
 					let value1 = reader.u8();
 					let pos = if value1 == 3 {
 						let _ = reader.u8();
-						[0.0; 3]
+						Vec3::default()
 					} else {
 						reader.vec3()
 					};
@@ -1461,7 +1461,7 @@ pub fn parse_cmi(
 					wl!("]");
 				}
 				0xB8 => {
-					let [value1, radius, size] = reader.vec3();
+					let [value1, radius, size] = reader.vec3().into();
 					wl!("Destroy alien (and damage area)] value1?: {value1}, radius?: {radius}, size? : {size}");
 				}
 				0xB9 => {

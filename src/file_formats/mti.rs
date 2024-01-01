@@ -44,8 +44,9 @@ impl<'a> Mti<'a> {
 			if flags == 0xFFFFFFFF {
 				// pen
 				let pen_value = reader.i32();
-				let _ = reader.u32(); // padding
-				let _ = reader.u32();
+				let padding1 = reader.u32(); // padding
+				let padding2 = reader.u32();
+				assert!(padding1 == 0 && padding2 == 0);
 				materials.push((name, Material::Pen(pen_value)));
 				continue;
 			}
@@ -54,7 +55,8 @@ impl<'a> Mti<'a> {
 			let a = reader.f32(); // todo what is this
 			let b = reader.f32(); // todo what is this
 			let start_offset = reader.u32() as usize;
-			let mut data = reader.clone_at(start_offset);
+
+			let mut entry_reader = reader.clone_at(start_offset);
 
 			let flags_mask = flags & 0x30000; // if the texture is animated or not
 			let flags_rest = flags & !0x30000; // todo what are these
@@ -71,22 +73,23 @@ impl<'a> Mti<'a> {
 			);
 
 			let num_frames = if flags_mask != 0 {
-				data.u32() as usize
+				entry_reader.u32() as usize
 			} else {
 				1
 			};
-			let width = data.u16();
-			let height = data.u16();
+			let width = entry_reader.u16();
+			let height = entry_reader.u16();
 			let frame_size = width as usize * height as usize;
 
 			if num_frames == 1 {
+				let pixels = entry_reader.slice(frame_size);
 				materials.push((
 					name,
 					Material::Texture(
 						Texture {
 							width,
 							height,
-							pixels: data.slice(frame_size).into(),
+							pixels: pixels.into(),
 						},
 						matflags,
 					),
@@ -97,57 +100,14 @@ impl<'a> Mti<'a> {
 					.map(|_| Texture {
 						width,
 						height,
-						pixels: data.slice(frame_size).into(),
+						pixels: entry_reader.slice(frame_size).into(),
 					})
 					.collect();
 				materials.push((name, Material::AnimatedTexture(frames, matflags)));
 			} else {
 				// compressed animation
-				let base_pixels = data.slice(frame_size);
-
-				let mut frames: Vec<Texture> = Vec::with_capacity(num_frames + 1);
-				frames.push(Texture {
-					width,
-					height,
-					pixels: base_pixels.into(),
-				});
-
-				let _runtime_anim_time = data.u32();
-
-				let mut data = data.resized(data.position()..); // offsets relative to here
-				let offsets = data.get_vec::<u32>(num_frames * 2); // run of meta offsets then run of pixels offsets
-				for (&metadata_offset, &pixel_offset) in
-					offsets[..num_frames].iter().zip(&offsets[num_frames..])
-				{
-					let mut meta = data.clone_at(metadata_offset as usize);
-					let mut src_pixels = data.clone_at(pixel_offset as usize);
-
-					let mut dest_pixels = frames.last().unwrap().pixels.clone().into_owned();
-
-					let mut dest_pixel_offset = meta.u16() as usize * 4;
-					let num_chunks = meta.u16();
-
-					for _ in 0..num_chunks {
-						let chunk_size = meta.u8() as usize * 4;
-						let output_offset = meta.u8() as usize * 4;
-						dest_pixels[dest_pixel_offset..dest_pixel_offset + chunk_size]
-							.clone_from_slice(src_pixels.slice(chunk_size));
-						dest_pixel_offset += chunk_size + output_offset;
-					}
-
-					frames.push(Texture {
-						width,
-						height,
-						pixels: dest_pixels.into(),
-					});
-				}
-
-				if frames.first() == frames.last() {
-					frames.pop();
-				} else {
-					eprintln!("texture {name} doesn't loop properly!");
-				}
-
+				let frames =
+					parse_compressed_animation(&mut entry_reader, width, height, num_frames);
 				materials.push((name, Material::AnimatedTexture(frames, matflags)));
 			}
 		}
@@ -202,4 +162,55 @@ impl<'a> Mti<'a> {
 			output.write("texture_flags", "tsv", &flags_summary);
 		}
 	}
+}
+
+fn parse_compressed_animation<'a>(
+	data: &mut Reader<'a>, width: u16, height: u16, num_frames: usize,
+) -> Vec<Texture<'a>> {
+	let base_pixels = data.slice(width as usize * height as usize);
+
+	let mut frames: Vec<Texture> = Vec::with_capacity(num_frames + 1);
+	frames.push(Texture {
+		width,
+		height,
+		pixels: base_pixels.into(),
+	});
+
+	let _runtime_anim_time = data.u32();
+
+	let mut data = data.rebased_start(); // offsets relative to here
+	let offsets = data.get_vec::<u32>(num_frames * 2); // run of meta offsets then run of pixels offsets
+	for (&metadata_offset, &pixel_offset) in
+		offsets[..num_frames].iter().zip(&offsets[num_frames..])
+	{
+		let mut meta = data.clone_at(metadata_offset as usize);
+		let mut src_pixels = data.clone_at(pixel_offset as usize);
+
+		let mut dest_pixels = frames.last().unwrap().pixels.clone().into_owned();
+
+		let mut dest_pixel_offset = meta.u16() as usize * 4;
+		let num_chunks = meta.u16();
+
+		for _ in 0..num_chunks {
+			let chunk_size = meta.u8() as usize * 4;
+			let output_offset = meta.u8() as usize * 4;
+			dest_pixels[dest_pixel_offset..dest_pixel_offset + chunk_size]
+				.clone_from_slice(src_pixels.slice(chunk_size));
+			dest_pixel_offset += chunk_size + output_offset;
+		}
+
+		frames.push(Texture {
+			width,
+			height,
+			pixels: dest_pixels.into(),
+		});
+	}
+
+	if frames.first() == frames.last() {
+		frames.pop();
+	} else {
+		eprintln!("texture doesn't loop properly!");
+	}
+
+	frames
 }

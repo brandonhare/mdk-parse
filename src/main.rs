@@ -16,10 +16,12 @@ mod file_formats;
 mod gltf;
 mod output_writer;
 mod reader;
-use data_formats::{Bsp, Wav};
+mod vectors;
+use data_formats::{Bsp, Mesh, Wav};
 use file_formats::{Dti, Fti, Mti, Sni};
 use output_writer::OutputWriter;
 use reader::Reader;
+use vectors::{Vec2, Vec3};
 
 struct DataFile<'a>(&'a Path, Vec<u8>);
 impl<'a> std::ops::Deref for DataFile<'a> {
@@ -113,40 +115,6 @@ impl<T> std::ops::DerefMut for NoDebug<T> {
 	fn deref_mut(&mut self) -> &mut Self::Target {
 		&mut self.0
 	}
-}
-
-type Vec2 = [f32; 2];
-type Vec3 = [f32; 3];
-type Vec4 = [f32; 4];
-
-fn swizzle(pos: Vec3) -> Vec3 {
-	[pos[0], pos[2], -pos[1]]
-}
-fn swizzle_slice(points: &mut [Vec3]) {
-	for point in points {
-		*point = swizzle(*point);
-	}
-}
-fn swizzle_vec(mut vec: Vec<Vec3>) -> Vec<Vec3> {
-	swizzle_slice(&mut vec);
-	vec
-}
-
-fn add_vec<T: std::ops::Add<Output = T>, const N: usize>(lhs: [T; N], rhs: [T; N]) -> [T; N] {
-	let mut iter = lhs.into_iter().zip(rhs).map(|(a, b)| a + b);
-	std::array::from_fn(|_| iter.next().unwrap())
-}
-
-fn get_bbox(points: &[Vec3]) -> [Vec3; 2] {
-	let mut min = [f32::INFINITY; 3];
-	let mut max = [f32::NEG_INFINITY; 3];
-	for point in points {
-		for i in 0..3 {
-			min[i] = min[i].min(point[i]);
-			max[i] = max[i].max(point[i]);
-		}
-	}
-	[min, max]
 }
 
 #[derive(Debug)]
@@ -464,13 +432,13 @@ fn parse_bni(path: &Path) {
 			continue;
 		}
 
-		if let Some(multimesh) = try_parse_multimesh(&mut reader.clone()) {
-			save_multimesh(name, &multimesh, &mut output);
+		if let Some(multimesh) = Mesh::try_parse(&mut reader.clone(), true) {
+			multimesh.save_as(name, &mut output);
 			continue;
 		}
 
-		if let Some(mesh) = try_parse_mesh(&mut reader.clone(), true) {
-			save_mesh(name, &mesh, &[], &mut output);
+		if let Some(mesh) = Mesh::try_parse(&mut reader.clone(), false) {
+			mesh.save_as(name, &mut output);
 			continue;
 		}
 
@@ -709,14 +677,9 @@ fn parse_mto_subthing(arena_name: &str, buf: &[u8], output: &mut OutputWriter) {
 		data.set_position(offset as usize);
 
 		let is_multimesh = data.u32();
-
-		if is_multimesh != 0 {
-			let result = try_parse_multimesh(&mut data).expect("failed to parse multimesh");
-			save_multimesh(name, &result, output);
-		} else {
-			let mesh = parse_mesh(&mut data, true);
-			save_mesh(name, &mesh, &[], output);
-		};
+		assert!(is_multimesh <= 1, "invalid multimesh type {is_multimesh}");
+		let mesh = Mesh::parse(&mut data, is_multimesh != 0);
+		mesh.save_as(name, output);
 	}
 
 	// sounds
@@ -730,20 +693,6 @@ fn parse_mto_subthing(arena_name: &str, buf: &[u8], output: &mut OutputWriter) {
 		let wav = Wav::parse(&mut reader);
 		output.write(sound_name, "wav", wav.samples.0);
 	}
-}
-
-#[derive(Debug, Default)]
-struct Submesh<'a> {
-	mesh: Mesh<'a>,
-	name: String,
-	origin: Vec3,
-}
-#[derive(Debug, Default)]
-struct Multimesh<'a> {
-	textures: Vec<String>,
-	meshes: Vec<Submesh<'a>>,
-	bbox: [Vec3; 2],
-	reference_points: Vec<Vec3>,
 }
 
 struct AlienAnim<'a> {
@@ -778,10 +727,10 @@ fn try_parse_alienanim(mut data: Reader<'_>) -> Option<AlienAnim<'_>> {
 		return None;
 	}
 
-	let mut target_vectors = swizzle_vec(data.try_get_vec::<Vec3>(num_frames)?);
+	let mut target_vectors = Vec3::swizzle_vec(data.try_get_vec::<Vec3>(num_frames)?);
 	for i in 1..target_vectors.len() {
 		// todo added in gameplay
-		target_vectors[i] = add_vec(target_vectors[i], target_vectors[i - 1]);
+		target_vectors[i] = target_vectors[i] + target_vectors[i - 1];
 	}
 
 	let num_reference_points = data.try_u32()? as usize;
@@ -790,7 +739,7 @@ fn try_parse_alienanim(mut data: Reader<'_>) -> Option<AlienAnim<'_>> {
 	}
 	let mut reference_points: Vec<Vec<Vec3>> = Vec::with_capacity(num_reference_points);
 	for _ in 0..num_reference_points {
-		let points_path = swizzle_vec(data.try_get_vec::<Vec3>(num_frames)?);
+		let points_path = Vec3::swizzle_vec(data.try_get_vec::<Vec3>(num_frames)?);
 		reference_points.push(points_path);
 	}
 
@@ -824,18 +773,21 @@ fn try_parse_alienanim(mut data: Reader<'_>) -> Option<AlienAnim<'_>> {
 						w as f32 * scale_pos,
 					]
 				});
-				for (path, &[x, y, z]) in point_paths.iter_mut().zip(&origin_points) {
-					path.push(swizzle([
-						r1[0] * x + r1[1] * y + r1[2] * z + r1[3],
-						r2[0] * x + r2[1] * y + r2[2] * z + r2[3],
-						r3[0] * x + r3[1] * y + r3[2] * z + r3[3],
-					]))
+				for (path, &Vec3 { x, y, z }) in point_paths.iter_mut().zip(&origin_points) {
+					path.push(
+						Vec3::from([
+							r1[0] * x + r1[1] * y + r1[2] * z + r1[3],
+							r2[0] * x + r2[1] * y + r2[2] * z + r2[3],
+							r3[0] * x + r3[1] * y + r3[2] * z + r3[3],
+						])
+						.swizzle(),
+					)
 				}
 			}
 		} else {
 			// origin points
 			for path in &mut point_paths {
-				path.push(swizzle(data.try_vec3()?));
+				path.push(data.try_vec3()?.swizzle());
 			}
 			// frames
 			for _ in 0..num_frames {
@@ -852,8 +804,8 @@ fn try_parse_alienanim(mut data: Reader<'_>) -> Option<AlienAnim<'_>> {
 					path.resize(frame_index, prev); // duplicate potential gaps so our timeline is full
 
 					let pos = data.try_get::<[i8; 3]>()?;
-					let pos = swizzle(pos.map(|i| i as f32 * scale));
-					path.push(add_vec(prev, pos));
+					let pos = Vec3::from(pos.map(|i| i as f32 * scale)).swizzle();
+					path.push(prev + pos);
 				}
 
 				if frame_index == num_frames {
@@ -906,8 +858,8 @@ fn save_alienanim_text(name: &str, anim: &AlienAnim, output: &mut OutputWriter) 
 	for (i, target) in anim
 		.target_vectors
 		.iter()
-		.scan([0.0; 3], |acc, item| {
-			*acc = add_vec(*acc, *item);
+		.scan(Vec3::default(), |acc, item| {
+			*acc += *item;
 			Some(*acc)
 		})
 		.enumerate()
@@ -948,7 +900,7 @@ fn save_alienanim(name: &str, anim: &AlienAnim, output: &mut OutputWriter) {
 	let base_timestamps = gltf.create_animation_timestamps(num_frames, fps / anim.speed);
 	let interpolation = Some(gltf::AnimationInterpolationMode::Step);
 
-	if anim.target_vectors.iter().any(|p| *p != [0.0; 3]) {
+	if anim.target_vectors.iter().any(|p| *p != Vec3::default()) {
 		let node = gltf.create_child_node(root_node, "Target Vectors".into(), cube_mesh);
 		gltf.add_animation_translation(
 			animation,
@@ -962,7 +914,7 @@ fn save_alienanim(name: &str, anim: &AlienAnim, output: &mut OutputWriter) {
 	if anim
 		.reference_points
 		.iter()
-		.any(|p| p.iter().any(|p| *p != [0.0; 3]))
+		.any(|p| p.iter().any(|p| *p != Vec3::default()))
 	{
 		let ref_node = gltf.create_child_node(root_node, "Reference Points".into(), None);
 		for (i, path) in anim.reference_points.iter().enumerate() {
@@ -985,12 +937,7 @@ fn save_alienanim(name: &str, anim: &AlienAnim, output: &mut OutputWriter) {
 		}
 	}
 
-	gltf.combine_buffers();
-	output.write(
-		name,
-		"anim.gltf",
-		serde_json::to_string(&gltf).unwrap().as_bytes(),
-	);
+	output.write(name, "anim.gltf", gltf.render_json().as_bytes());
 
 	//save_alienanim_text(name, anim, output);
 }
@@ -1092,16 +1039,10 @@ fn parse_cmi(path: &Path) {
 				empty.push('\n');
 				continue;
 			}
-			let mesh_type = data.i32();
-			if mesh_type == 0 {
-				let mesh = parse_mesh(&mut data, true);
-				save_mesh(name, &mesh, &[], &mut mesh_output);
-			} else if mesh_type == 1 {
-				let mesh = try_parse_multimesh(&mut data).expect("failed to parse multimesh");
-				save_multimesh(name, &mesh, &mut mesh_output);
-			} else {
-				panic!("invalid mesh type for {name} in {filename}: {mesh_type}");
-			}
+			let is_multimesh = data.u32();
+			assert!(is_multimesh <= 1, "invalid multimesh type {is_multimesh}");
+			let mesh = Mesh::parse(&mut data, is_multimesh != 0);
+			mesh.save_as(name, &mut mesh_output);
 		}
 		if !empty.is_empty() {
 			mesh_output.write("others", "txt", empty.as_bytes());
@@ -1309,46 +1250,6 @@ fn save_anim(name: &str, frames: &[Anim], fps: u16, output: &mut OutputWriter, p
 	encoder.finish().expect("failed to write png file");
 }
 
-#[derive(Clone)]
-struct MeshTri {
-	indices: [u16; 3],
-	texture: i16,
-	uvs: [Vec2; 3],
-	flags: u32, // bsp id and flags, 0 for normal meshes
-}
-impl MeshTri {
-	fn id(&self) -> u8 {
-		(self.flags >> 24) as u8
-	}
-	fn outlines(&self) -> [bool; 3] {
-		[
-			self.flags & 0x100000 != 0,
-			self.flags & 0x200000 != 0,
-			self.flags & 0x400000 != 0,
-		]
-	}
-}
-
-#[derive(Default, Clone)]
-struct Mesh<'a> {
-	textures: Vec<&'a str>,
-	verts: Vec<Vec3>,
-	tris: Vec<MeshTri>,
-	bbox: [Vec3; 2],
-	reference_points: Vec<Vec3>,
-}
-impl<'a> std::fmt::Debug for Mesh<'a> {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		f.debug_struct("Mesh")
-			.field("textures", &self.textures)
-			.field("verts", &self.verts.len())
-			.field("tris", &self.tris.len())
-			.field("bbox", &self.bbox)
-			.field("reference points", &self.reference_points.len())
-			.finish()
-	}
-}
-
 #[derive(Debug, Clone)]
 struct ImageRef {
 	name: String,
@@ -1356,325 +1257,8 @@ struct ImageRef {
 	width: usize,
 	height: usize,
 }
-
-fn try_parse_mesh_tris(data: &mut Reader, count: usize) -> Option<Vec<MeshTri>> {
-	if count > 10000 {
-		return None;
-	}
-	let mut result = Vec::with_capacity(count);
-	for _ in 0..count {
-		let indices = data.try_get()?;
-		let texture = data.try_i16()?;
-		if texture > 256 {
-			return None;
-		}
-		let uvs = data.try_get_unvalidated()?;
-
-		let flags = data.try_u32()?;
-
-		result.push(MeshTri {
-			indices,
-			texture,
-			uvs,
-			flags,
-		});
-	}
-	Some(result)
-}
-
-fn parse_mesh<'a>(data: &mut Reader<'a>, read_textures: bool) -> Mesh<'a> {
-	try_parse_mesh(data, read_textures).expect("failed to read mesh")
-}
-
-fn try_parse_mesh<'a>(data: &mut Reader<'a>, read_textures: bool) -> Option<Mesh<'a>> {
-	let textures = if read_textures {
-		let num_textures = data.try_u32()? as usize;
-		if num_textures > 500 {
-			return None;
-		};
-		let mut textures = Vec::with_capacity(num_textures);
-		for _ in 0..num_textures {
-			textures.push(data.try_str(16)?);
-		}
-		textures
-	} else {
-		Default::default()
-	};
-
-	let num_verts = data.try_u32()? as usize;
-	if num_verts > 10000 {
-		return None;
-	}
-	let verts = swizzle_vec(data.try_get_vec::<Vec3>(num_verts)?);
-
-	let num_tris = data.try_u32()? as usize;
-	if num_tris > 10000 {
-		return None;
-	}
-	let tris = try_parse_mesh_tris(data, num_tris)?;
-
-	assert!(
-		tris.iter().all(|tri| tri.flags == 0),
-		"found mesh with non-zero triangle flags!"
-	);
-
-	let [min_x, max_x, min_y, max_y, min_z, max_z]: [f32; 6] = data.try_get()?;
-	let bbox = [
-		swizzle([min_x, min_y, min_z]),
-		swizzle([max_x, max_y, max_z]),
-	];
-
-	let reference_points = if read_textures {
-		let num_reference_points = data.try_u32()?;
-		swizzle_vec(data.try_get_vec(num_reference_points as usize)?)
-	} else {
-		Default::default()
-	};
-
-	Some(Mesh {
-		textures,
-		verts,
-		tris,
-		bbox,
-		reference_points,
-	})
-}
-
-fn try_parse_multimesh<'a>(data: &mut Reader<'a>) -> Option<Multimesh<'a>> {
-	let num_textures = data.try_u32()? as usize;
-	if num_textures > 500 {
-		return None;
-	};
-	let mut textures = Vec::with_capacity(num_textures);
-	for _ in 0..num_textures {
-		textures.push(data.try_str(16)?.to_owned());
-	}
-
-	let mut meshes = Vec::new();
-	let num_submeshes = data.try_u32()?;
-	if num_submeshes > 1000 {
-		return None;
-	}
-	for _ in 0..num_submeshes {
-		let name = data.try_str(12)?;
-		let origin = swizzle(data.try_vec3()?);
-		let mut mesh = try_parse_mesh(data, false)?;
-		// shift to origin
-		for point in &mut mesh.verts {
-			for (a, b) in point.iter_mut().zip(origin) {
-				*a -= b;
-			}
-		}
-		meshes.push(Submesh {
-			mesh,
-			name: name.to_owned(),
-			origin,
-		});
-	}
-	let [min_x, max_x, min_y, max_y, min_z, max_z]: [f32; 6] = data.try_get()?;
-	let bbox = [
-		swizzle([min_x, min_y, min_z]),
-		swizzle([max_x, max_y, max_z]),
-	];
-
-	let num_reference_points = data.try_u32()?;
-	let reference_points = swizzle_vec(data.try_get_vec::<Vec3>(num_reference_points as usize)?);
-
-	Some(Multimesh {
-		textures,
-		meshes,
-		bbox,
-		reference_points,
-	})
-}
-
 fn to_string(path: &OsStr) -> String {
 	path.to_str().unwrap().to_owned()
-}
-
-fn add_mesh_to_gltf(
-	gltf: &mut gltf::Gltf, name: String, mesh: &Mesh, textures: &[ImageRef],
-	target: Option<gltf::NodeIndex>,
-) -> gltf::NodeIndex {
-	#[derive(Default, Debug)]
-	struct SplitMesh {
-		texture_id: i16,
-		image: Option<ImageRef>,
-		material: Option<gltf::MaterialIndex>,
-		indices: Vec<u16>,
-		verts: Vec<Vec3>,
-		uvs: Vec<[f32; 2]>,
-		vert_map: HashMap<(u16, [isize; 2]), u16>,
-	}
-
-	fn round_uvs(uvs: [f32; 2]) -> [isize; 2] {
-		uvs.map(|f| (f * 1024.0) as isize)
-	}
-
-	let mut primitives: Vec<SplitMesh> = if textures.is_empty() {
-		Vec::from_iter(once(Default::default()))
-	} else {
-		mesh.textures
-			.iter()
-			.enumerate()
-			.map(|(i, tex)| {
-				let mut result = SplitMesh::default();
-				if let Some(r) = textures.iter().find(|t| &t.name == tex) {
-					result.image = Some(r.clone());
-					result.texture_id = i as _;
-					result.material = Some(gltf.create_texture_material_ref(
-						tex.to_string(),
-						to_string(r.relative_path.as_os_str()),
-					));
-				} else {
-					result.texture_id = -tex[4..].parse::<i16>().expect("expected a pen number");
-					result.material =
-						Some(gltf.create_colour_material(tex.to_string(), [0.0, 0.0, 0.0, 1.0]));
-				}
-				result
-			})
-			.collect()
-	};
-
-	fn get_split_mesh(meshes: &mut [SplitMesh], index: i16) -> &mut SplitMesh {
-		if meshes.len() == 1 {
-			return &mut meshes[0];
-		}
-
-		meshes
-			.iter_mut()
-			.find(|mesh| mesh.texture_id == index)
-			.expect("mesh not found for index {index}")
-	}
-
-	for tri in &mesh.tris {
-		let split_mesh = get_split_mesh(&mut primitives, tri.texture);
-
-		let indices = &tri.indices;
-		let uvs = &tri.uvs;
-
-		if tri.flags & 2 != 0 {
-			// start hidden
-			continue;
-		}
-		if indices[0] == indices[1] && indices[0] == indices[2] {
-			// fully degenerate
-			continue;
-		}
-		if tri.outlines() == [false; 3]
-			&& (indices[0] == indices[1] || indices[1] == indices[2] || indices[0] == indices[2])
-		{
-			// partially degenerate
-			continue;
-		} // else might be a line
-
-		for i in (0..3).rev() {
-			let index = indices[i];
-			let mut uv = uvs[i];
-
-			if let Some(img) = &split_mesh.image {
-				uv[0] /= img.width as f32;
-				uv[1] /= img.height as f32;
-			}
-
-			let new_index = *split_mesh
-				.vert_map
-				.entry((index, round_uvs(uv)))
-				.or_insert_with(|| {
-					let result = split_mesh.verts.len();
-					split_mesh.verts.push(mesh.verts[index as usize]);
-					split_mesh.uvs.push(uv);
-					result as _
-				});
-
-			split_mesh.indices.push(new_index);
-		}
-	}
-
-	primitives.retain(|prim| !prim.indices.is_empty());
-	if primitives.is_empty() && mesh.reference_points.is_empty() {
-		return target.unwrap_or_else(|| gltf.create_node(name.to_owned(), None));
-	}
-
-	let mesh_index = gltf.create_mesh(name.to_owned());
-	for new_mesh in &primitives {
-		gltf.add_mesh_primitive(
-			mesh_index,
-			&new_mesh.verts,
-			&new_mesh.indices,
-			Some(&new_mesh.uvs),
-			new_mesh.material,
-		);
-	}
-
-	let node = match target {
-		Some(node) => {
-			assert!(
-				gltf.get_node_mesh(node).is_none(),
-				"replacing target node mesh!"
-			);
-			gltf.set_node_mesh(node, mesh_index);
-			node
-		}
-		None => gltf.create_node(name.to_owned(), Some(mesh_index)),
-	};
-
-	let reference_points = &mesh.reference_points;
-	if !reference_points.is_empty() {
-		gltf.create_points_nodes("Reference Points".to_owned(), reference_points, Some(node));
-	}
-
-	node
-}
-
-fn save_mesh(name: &str, mesh: &Mesh, textures: &[ImageRef], output: &mut OutputWriter) {
-	let mut gltf = gltf::Gltf::new(name.to_owned());
-
-	let root = gltf.get_root_node();
-	add_mesh_to_gltf(&mut gltf, name.to_owned(), mesh, textures, Some(root));
-
-	gltf.combine_buffers();
-	output.write(
-		name,
-		"gltf",
-		serde_json::to_string(&gltf).unwrap().as_bytes(),
-	);
-}
-
-fn save_multimesh(name: &str, multimesh: &Multimesh, output: &mut OutputWriter) {
-	let mut gltf = gltf::Gltf::new(name.to_owned());
-
-	let base_node = gltf.get_root_node();
-
-	for (i, submesh) in multimesh.meshes.iter().enumerate() {
-		let submesh_name = if submesh.name.is_empty() {
-			format!("{i}")
-		} else {
-			submesh.name.clone()
-		};
-
-		let subnode_index = gltf.create_child_node(base_node, submesh_name.clone(), None);
-		gltf.set_node_position(subnode_index, submesh.origin);
-		add_mesh_to_gltf(
-			&mut gltf,
-			submesh_name.clone(),
-			&submesh.mesh,
-			&[],
-			Some(subnode_index),
-		);
-	}
-
-	let reference_points = &multimesh.reference_points;
-	if !reference_points.is_empty() {
-		gltf.create_points_nodes(
-			"Reference Points".to_owned(),
-			reference_points,
-			Some(base_node),
-		);
-	}
-
-	gltf.combine_buffers();
-	output.write(name, "gltf", &serde_json::to_vec(&gltf).unwrap());
 }
 
 fn debug_scan_data_for_float_runs(data: &mut Reader) {

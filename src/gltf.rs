@@ -154,7 +154,7 @@ struct Node {
 	#[serde(skip_serializing_if = "Option::is_none")]
 	mesh: Option<MeshIndex>,
 	#[serde(skip_serializing_if = "Option::is_none")]
-	translation: Option<[f32; 3]>,
+	translation: Option<Vec3>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	children: Vec<NodeIndex>,
 	#[serde(skip_serializing_if = "serde_json::Map::is_empty")]
@@ -428,7 +428,7 @@ impl Gltf {
 		accessor_index
 	}
 
-	fn add_positions(&mut self, data: &[[f32; 3]]) -> AccessorIndex {
+	fn add_positions(&mut self, data: &[Vec3]) -> AccessorIndex {
 		self.add_primitive_data(data, PrimitiveTarget::Vertices)
 	}
 	fn add_uvs(&mut self, data: &[[f32; 2]]) -> AccessorIndex {
@@ -510,6 +510,7 @@ impl Gltf {
 	}
 
 	pub fn combine_buffers(&mut self) {
+		// todo dont merge buffers of different types?
 		for view in &mut self.buffer_views {
 			let buffer_index = view.buffer.0;
 			if buffer_index == 0 {
@@ -534,6 +535,10 @@ impl Gltf {
 			dest.uri.append(&mut src.uri);
 		}
 		self.buffers.truncate(1);
+	}
+
+	pub fn render_json(&mut self) -> String {
+		serde_json::to_string(self).unwrap()
 	}
 
 	pub fn get_cube_mesh(&mut self) -> MeshIndex {
@@ -575,16 +580,16 @@ impl Gltf {
 	}
 }
 
-const fn make_unit_cube() -> ([[f32; 3]; 8], [u16; 36]) {
+const fn make_unit_cube() -> ([Vec3; 8], [u16; 36]) {
 	let points = [
-		[-0.5, -0.5, -0.5],
-		[-0.5, -0.5, 0.5],
-		[-0.5, 0.5, -0.5],
-		[-0.5, 0.5, 0.5],
-		[0.5, -0.5, -0.5],
-		[0.5, -0.5, 0.5],
-		[0.5, 0.5, -0.5],
-		[0.5, 0.5, 0.5],
+		Vec3::from_array([-0.5, -0.5, -0.5]),
+		Vec3::from_array([-0.5, -0.5, 0.5]),
+		Vec3::from_array([-0.5, 0.5, -0.5]),
+		Vec3::from_array([-0.5, 0.5, 0.5]),
+		Vec3::from_array([0.5, -0.5, -0.5]),
+		Vec3::from_array([0.5, -0.5, 0.5]),
+		Vec3::from_array([0.5, 0.5, -0.5]),
+		Vec3::from_array([0.5, 0.5, 0.5]),
 	];
 	let indices = [
 		0, 1, 2, 2, 1, 3, // -x
@@ -597,12 +602,9 @@ const fn make_unit_cube() -> ([[f32; 3]; 8], [u16; 36]) {
 	(points, indices)
 }
 
-fn make_cube(scale: f32) -> ([[f32; 3]; 8], [u16; 36]) {
-	const CUBE: ([[f32; 3]; 8], [u16; 36]) = make_unit_cube();
-	(
-		CUBE.0.map(|[x, y, z]| [x * scale, y * scale, z * scale]),
-		CUBE.1,
-	)
+fn make_cube(scale: f32) -> ([Vec3; 8], [u16; 36]) {
+	const CUBE: ([Vec3; 8], [u16; 36]) = make_unit_cube();
+	(CUBE.0.map(|vec| vec * scale), CUBE.1)
 }
 
 fn to_uri(data: &[u8]) -> String {
@@ -769,6 +771,21 @@ impl<T: BufferData + Into<f64>> BufferData for [T; 4 * 4] {
 
 	fn minmax1(&self, rhs: &Self) -> (Self, Self) {
 		minmax_arr(self, rhs, T::minmax1)
+	}
+}
+
+impl BufferData for Vec3 {
+	const COMPONENT_TYPE: usize = <[f32; 3] as BufferData>::COMPONENT_TYPE;
+	const ACCESSOR_TYPE: &'static str = <[f32; 3] as BufferData>::ACCESSOR_TYPE;
+	const NUM_COMPONENTS: usize = <[f32; 3] as BufferData>::NUM_COMPONENTS;
+	type InnerType = <[f32; 3] as BufferData>::InnerType;
+
+	fn to_array(&self) -> &[Self::InnerType] {
+		self.as_slice()
+	}
+	fn minmax1(&self, rhs: &Self) -> (Self, Self) {
+		let (lhs, rhs) = <[f32; 3] as BufferData>::minmax1(self, rhs);
+		(lhs.into(), rhs.into())
 	}
 }
 

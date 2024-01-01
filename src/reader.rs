@@ -1,6 +1,8 @@
 use std::io;
 use std::io::Read;
 
+use crate::vectors::Vec3;
+
 #[cfg(not(target_endian = "little"))]
 compile_error!("big endian not supported!");
 
@@ -349,7 +351,7 @@ impl<'buf> Reader<'buf> {
 	pub fn vec2(&mut self) -> [f32; 2] {
 		self.get()
 	}
-	pub fn vec3(&mut self) -> [f32; 3] {
+	pub fn vec3(&mut self) -> Vec3 {
 		self.get()
 	}
 	pub fn vec4(&mut self) -> [f32; 4] {
@@ -359,7 +361,7 @@ impl<'buf> Reader<'buf> {
 	pub fn try_vec2(&mut self) -> Option<[f32; 2]> {
 		self.try_get()
 	}
-	pub fn try_vec3(&mut self) -> Option<[f32; 3]> {
+	pub fn try_vec3(&mut self) -> Option<Vec3> {
 		self.try_get()
 	}
 	pub fn try_vec4(&mut self) -> Option<[f32; 4]> {
@@ -434,3 +436,20 @@ macro_rules! allNums {
 	};
 }
 allNums!(make_readable);
+
+impl Readable for Vec3 {
+	type Buffer = <[f32; 3] as Readable>::Buffer;
+	fn new_buffer() -> Self::Buffer {
+		Default::default()
+	}
+	fn convert_big(buf: Self::Buffer) -> Self {
+		<[f32; 3] as Readable>::convert_big(buf).into()
+	}
+	fn convert_little(buf: Self::Buffer) -> Self {
+		<[f32; 3] as Readable>::convert_little(buf).into()
+	}
+	fn validate(&self) -> bool {
+		let base: [f32; 3] = self.into();
+		base.validate()
+	}
+}

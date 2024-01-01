@@ -129,7 +129,7 @@ impl<'a> Dti<'a> {
 					let id = arena_data.i32();
 					let value = arena_data.i32();
 					let pos_min = arena_data.vec3();
-					let mut pos_max = [0.0; 3];
+					let mut pos_max = pos_min;
 
 					if kind != 2 && kind != 6 {
 						assert_eq!(value, 0);
@@ -266,7 +266,7 @@ impl<'a> Dti<'a> {
 			writeln!(info, "\t\tentities ({}):", arena.entities.len()).unwrap();
 
 			for (entity_index, entity) in arena.entities.iter().enumerate() {
-				if entity.bbox[1] == [0.0; 3] {
+				if entity.bbox[0] == entity.bbox[1] {
 					writeln!(
 						info,
 						"\t\t\t[{entity_index:3}] id: {:4}, kind: {:?}, position: {:?}",

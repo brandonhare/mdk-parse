@@ -17,6 +17,7 @@ pub struct MaterialFlags {
 
 #[derive(Debug)]
 pub struct Mti<'a> {
+	pub filename: &'a str,
 	pub materials: Vec<(&'a str, Material<'a>)>,
 }
 
@@ -24,7 +25,7 @@ impl<'a> Mti<'a> {
 	pub fn parse(reader: &mut Reader<'a>) -> Mti<'a> {
 		let filesize = reader.u32() as usize;
 		let mut reader = {
-			let mut new_reader = reader.rebased_start();
+			let mut new_reader = reader.rebased();
 			reader.skip(filesize);
 			new_reader.set_end(filesize);
 			new_reader
@@ -116,7 +117,10 @@ impl<'a> Mti<'a> {
 		let footer = reader.str(12);
 		assert_eq!(filename, footer, "mti footer does not match");
 
-		Mti { materials }
+		Mti {
+			filename,
+			materials,
+		}
 	}
 
 	pub fn save(&self, output: &mut OutputWriter, palette: Option<&[u8]>) {
@@ -178,7 +182,7 @@ fn parse_compressed_animation<'a>(
 
 	let _runtime_anim_time = data.u32();
 
-	let mut data = data.rebased_start(); // offsets relative to here
+	let mut data = data.rebased(); // offsets relative to here
 	let offsets = data.get_vec::<u32>(num_frames * 2); // run of meta offsets then run of pixels offsets
 	for (&metadata_offset, &pixel_offset) in
 		offsets[..num_frames].iter().zip(&offsets[num_frames..])

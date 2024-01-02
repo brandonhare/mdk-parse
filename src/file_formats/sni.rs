@@ -3,16 +3,46 @@ use crate::{save_anim, try_parse_anim, Anim, Bsp, OutputWriter, Wav};
 
 #[derive(Debug)]
 pub struct Sni<'a> {
-	pub sounds: Vec<(&'a str, Wav<'a>, i32)>,
+	pub filename: &'a str,
+	pub sounds: Vec<(&'a str, SoundInfo<'a>)>,
 	pub bsps: Vec<(&'a str, Bsp<'a>)>,
 	pub anims: Vec<(&'a str, Vec<Anim>)>,
+}
+
+#[derive(Debug)]
+pub struct SoundInfo<'a> {
+	pub wav: Wav<'a>,
+	pub sound_kind: i32,
+}
+impl<'a> SoundInfo<'a> {
+	pub fn save_as(&self, name: &str, output: &mut OutputWriter) {
+		self.wav.save_as(name, output)
+	}
+	pub fn create_report_tsv(sounds: &[(&str, Self)]) -> String {
+		use std::fmt::Write;
+		let mut summary =
+			String::from("name\tchannels\tsample rate\tbit depth\tduration (s)\tkind\n");
+		for (name, sound) in sounds {
+			writeln!(
+				summary,
+				"{name}\t{}\t{}\t{}\t{}\t{:X}",
+				sound.wav.num_channels,
+				sound.wav.samples_per_second,
+				sound.wav.bits_per_sample,
+				sound.wav.duration_secs,
+				sound.sound_kind
+			)
+			.unwrap();
+		}
+		summary
+	}
 }
 
 impl<'a> Sni<'a> {
 	pub fn parse(mut reader: Reader<'a>) -> Sni<'a> {
 		let filesize = reader.u32() + 4;
 		assert_eq!(reader.len(), filesize as usize, "filesize does not match");
-		reader.rebase_start();
+		reader.rebase();
 
 		let filename = reader.str(12);
 		let filesize2 = reader.u32();
@@ -45,7 +75,13 @@ impl<'a> Sni<'a> {
 				bsps.push((entry_name, bsp));
 			} else {
 				let wav = Wav::parse(&mut entry_reader);
-				sounds.push((entry_name, wav, entry_type));
+				sounds.push((
+					entry_name,
+					SoundInfo {
+						wav,
+						sound_kind: entry_type,
+					},
+				));
 			}
 		}
 
@@ -55,6 +91,7 @@ impl<'a> Sni<'a> {
 		assert_eq!(filename, filename2, "incorrect sni footer");
 
 		Sni {
+			filename,
 			sounds,
 			bsps,
 			anims,
@@ -62,29 +99,24 @@ impl<'a> Sni<'a> {
 	}
 
 	pub fn save(&self, output: &mut OutputWriter) {
-		let mut sound_summary =
-			String::from("name\tchannels\tsample rate\tbit depth\tduration (s)\tentry type\n");
-		for (name, sound, entry_type) in self.sounds.iter() {
+		for (name, sound) in &self.sounds {
 			sound.save_as(name, output);
-
-			use std::fmt::Write;
-			writeln!(
-				sound_summary,
-				"{name}\t{}\t{}\t{}\t{}\t{entry_type:X}",
-				sound.num_channels,
-				sound.samples_per_second,
-				sound.bits_per_sample,
-				sound.duration_secs
-			)
-			.unwrap();
 		}
+		let sound_summary = SoundInfo::create_report_tsv(&self.sounds);
 		output.write("sounds", "tsv", &sound_summary);
 
-		for (name, bsp) in self.bsps.iter() {
-			bsp.save_as(name, output);
+		if !self.bsps.is_empty() {
+			let mut bsp_output = output.push_dir("bsps");
+			for (name, bsp) in self.bsps.iter() {
+				bsp.save_as(name, &mut bsp_output);
+			}
 		}
-		for (name, anim) in self.anims.iter() {
-			save_anim(name, anim, 30, output, None);
+
+		if !self.anims.is_empty() {
+			let mut anim_output = output.push_dir("animations");
+			for (name, anim) in self.anims.iter() {
+				save_anim(name, anim, 30, &mut anim_output, None);
+			}
 		}
 	}
 }

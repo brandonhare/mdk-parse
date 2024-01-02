@@ -83,16 +83,25 @@ impl<'buf> Reader<'buf> {
 		result
 	}
 
-	pub fn set_end(&mut self, end_pos: usize) {
-		self.resize_pos(0..end_pos, self.position());
+	pub fn set_end(&mut self, length: usize) {
+		self.resize_pos(0..length, self.position());
 	}
 
-	pub fn rebase_start(&mut self) {
+	pub fn rebase(&mut self) {
 		self.resize(self.position()..);
 	}
+	pub fn rebase_length(&mut self, length: usize) {
+		let pos = self.position();
+		self.resize(pos..pos + length);
+	}
 	#[must_use]
-	pub fn rebased_start(&self) -> Self {
+	pub fn rebased(&self) -> Self {
 		self.resized(self.position()..)
+	}
+	#[must_use]
+	pub fn rebased_length(&self, length: usize) -> Self {
+		let pos = self.position();
+		self.resized(pos..pos + length)
 	}
 
 	pub fn buf(&self) -> &'buf [u8] {

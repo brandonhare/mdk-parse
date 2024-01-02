@@ -3,7 +3,7 @@ use crate::{NoDebug, OutputWriter};
 
 #[derive(Debug)]
 pub struct Wav<'a> {
-	pub samples: NoDebug<&'a [u8]>,
+	pub file_data: NoDebug<&'a [u8]>,
 	pub num_channels: u16,
 	pub samples_per_second: u32,
 	pub bits_per_sample: u16,
@@ -11,13 +11,13 @@ pub struct Wav<'a> {
 }
 
 fn try_parse_inner<'a>(reader: &mut Reader<'a>) -> Option<Wav<'a>> {
+	let start_pos = reader.position();
 	if reader.try_slice(4) != Some(b"RIFF") {
 		return None;
 	}
 	let file_length = reader.try_u32()? as usize;
-	if file_length > reader.remaining_len() {
-		return None;
-	}
+	let file_data = reader.clone_at(start_pos).try_slice(file_length + 8)?;
+
 	if reader.try_slice(4) != Some(b"WAVE") {
 		return None;
 	}
@@ -55,8 +55,10 @@ fn try_parse_inner<'a>(reader: &mut Reader<'a>) -> Option<Wav<'a>> {
 	let num_samples = samples.len() / bytes_per_sample;
 	let duration_secs = num_samples as f32 / samples_per_second as f32;
 
+	assert!(reader.position() - start_pos <= file_length + 8);
+
 	Some(Wav {
-		samples: NoDebug(samples),
+		file_data: NoDebug(file_data),
 		num_channels,
 		samples_per_second,
 		bits_per_sample,
@@ -78,6 +80,6 @@ impl<'a> Wav<'a> {
 	}
 
 	pub fn save_as(&self, name: &str, output: &mut OutputWriter) {
-		output.write(name, "wav", self.samples.0)
+		output.write(name, "wav", self.file_data.0)
 	}
 }

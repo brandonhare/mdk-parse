@@ -6,7 +6,6 @@ use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fmt::Write;
 use std::fs::{self, DirEntry};
-use std::iter::once;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -18,7 +17,7 @@ mod output_writer;
 mod reader;
 mod vectors;
 use data_formats::{Bsp, Mesh, Wav};
-use file_formats::{Dti, Fti, Mti, Sni};
+use file_formats::{Dti, Fti, Mti, Mto, Sni};
 use output_writer::OutputWriter;
 use reader::Reader;
 use vectors::{Vec2, Vec3};
@@ -132,7 +131,7 @@ fn try_parse_anim(reader: &mut Reader) -> Option<Vec<Anim>> {
 	if filesize > data.remaining_len() {
 		return None;
 	}
-	data.rebase_start();
+	data.rebase();
 
 	let num_frames = data.try_u32()? as usize;
 	if num_frames > 1000 {
@@ -324,7 +323,7 @@ fn parse_bni(path: &Path) {
 		// audio
 		let mut reader = Reader::new(data);
 		if let Some(wav) = Wav::try_parse(&mut reader) {
-			output.write(name, "wav", wav.samples.0);
+			output.write(name, "wav", wav.file_data.0);
 			continue;
 		}
 
@@ -564,135 +563,6 @@ fn try_parse_image(name: &str, buffer: &[u8], output: &mut OutputWriter) -> bool
 	let pixels = reader.slice(num_pixels);
 	output.write_png(name, width as u32, height as u32, pixels, Some(palette));
 	true
-}
-
-fn parse_mto(path: &Path) {
-	let buf = read_file(path);
-	let filename = get_filename(path);
-	let mut data = Reader::new(&buf);
-
-	let filesize = data.u32() + 4;
-	assert_eq!(data.len() as u32, filesize, "filesize does not match");
-
-	let mto_name = data.str(12);
-	let filesize2 = data.u32();
-	assert_eq!(filesize, filesize2 + 12, "filesizes do not match");
-	let num_arenas = data.u32() as u64;
-
-	let output = OutputWriter::new(path, true);
-	for _ in 0..num_arenas {
-		let arena_name = data.str(8);
-		let arena_offset = data.u32() as usize;
-
-		let mut output = output.push_dir(arena_name);
-
-		let mut asset_reader = data.resized(arena_offset..);
-		let asset_filesize = asset_reader.u32();
-		asset_reader.resize(4..asset_filesize as usize);
-
-		let subfile_offset = asset_reader.u32() as usize;
-		let pal_offset = asset_reader.u32() as usize;
-		let bsp_offset = asset_reader.u32() as usize;
-
-		let matfile_offset = asset_reader.position();
-
-		{
-			// parse subfile
-			asset_reader.set_position(subfile_offset);
-			let offset1_len = asset_reader.u32() as usize;
-			let offset1_data = &asset_reader.remaining_buf()[..offset1_len];
-			parse_mto_subthing(arena_name, offset1_data, &mut output);
-		}
-
-		{
-			// parse pal
-			asset_reader.set_position(pal_offset);
-			let pal_size = bsp_offset - pal_offset;
-			assert_eq!(pal_size, 336);
-			let pal_data = asset_reader.slice(pal_size);
-			let pal_full = set_pal(filename, arena_name, pal_data);
-			output.write_palette("PAL", pal_data);
-			if let Some(pal_full) = pal_full {
-				output.write_palette("PAL_full", &pal_full);
-			}
-		}
-
-		{
-			// parse bsp
-			asset_reader.set_position(bsp_offset);
-			let bsp = Bsp::parse(&mut asset_reader);
-			bsp.save_as(arena_name, &mut output);
-		}
-
-		{
-			// output matfile
-			asset_reader.set_position(matfile_offset);
-			let mti = Mti::parse(&mut asset_reader);
-			let pal = get_pal(arena_name, arena_name);
-			mti.save(&mut output, pal.as_deref());
-		}
-	}
-}
-
-fn parse_mto_subthing(arena_name: &str, buf: &[u8], output: &mut OutputWriter) {
-	let mut data = Reader::new(buf);
-
-	let num_animations = data.u32();
-	let num_meshes = data.u32();
-	let num_sounds = data.u32();
-
-	//output.write(arena_name, "thing", data.buf());
-
-	let animations: Vec<_> = (0..num_animations)
-		.map(|_| (data.str(8), data.u32()))
-		.collect();
-	let mesh_headers: Vec<_> = (0..num_meshes).map(|_| (data.str(8), data.u32())).collect();
-	let sound_headers: Vec<_> = (0..num_sounds)
-		.map(|_| (data.str(12), data.i16(), data.i16(), data.u32(), data.u32()))
-		.collect();
-
-	// todo remove this debug thing
-	let mut all_offsets: Vec<u32> = animations
-		.iter()
-		.chain(mesh_headers.iter())
-		.map(|(_, o)| *o)
-		.chain(sound_headers.iter().map(|s| s.3))
-		.chain(once(buf.len() as u32))
-		.collect();
-	all_offsets.sort();
-
-	// animations?
-	for (i, &(name, offset)) in animations.iter().enumerate() {
-		let end = all_offsets[all_offsets.iter().position(|o| *o == offset).unwrap() + 1];
-		let Some(anim) = try_parse_alienanim(data.resized(offset as usize..end as usize)) else {
-			eprintln!("failed to parse anim {i} {arena_name}/{name}");
-			output.write(name, "", &data.buf()[offset as usize..end as usize]);
-			continue;
-		};
-		save_alienanim(name, &anim, output);
-	}
-
-	// meshes
-	for &(name, offset) in &mesh_headers {
-		data.set_position(offset as usize);
-
-		let is_multimesh = data.u32();
-		assert!(is_multimesh <= 1, "invalid multimesh type {is_multimesh}");
-		let mesh = Mesh::parse(&mut data, is_multimesh != 0);
-		mesh.save_as(name, output);
-	}
-
-	// sounds
-	for &(sound_name, looping, b, sound_offset, sound_length) in &sound_headers {
-		assert_eq!(b, 0x7FFF);
-		assert!(looping == 0 || looping == 1);
-
-		let mut reader =
-			Reader::new(&buf[sound_offset as usize..sound_offset as usize + sound_length as usize]);
-
-		let wav = Wav::parse(&mut reader);
-		output.write(sound_name, "wav", wav.samples.0);
-	}
 }
 
 struct AlienAnim<'a> {
@@ -1362,12 +1232,17 @@ fn for_all_ext(path: impl AsRef<Path>, ext: &str, func: fn(&Path)) {
 }
 
 fn parse_dti(path: &Path) {
-	let filename = get_filename(path);
 	let file = read_file(path);
 	let dti = Dti::parse(Reader::new(&file));
-	set_pal(filename, filename.split_once('.').unwrap().0, dti.pal);
 	dti.save(&mut OutputWriter::new(path, true));
 }
+
+fn parse_mto(path: &Path) {
+	let file = read_file(path);
+	let mto = Mto::parse(Reader::new(&file));
+	mto.save(&mut OutputWriter::new(path, true));
+}
+
 fn parse_sni(path: &Path) {
 	let file = read_file(path);
 	let sni = Sni::parse(Reader::new(&file));
@@ -1375,11 +1250,9 @@ fn parse_sni(path: &Path) {
 }
 
 fn parse_mti(path: &Path) {
-	let filename = get_filename(path);
 	let file = read_file(path);
 	let mti = Mti::parse(&mut Reader::new(&file));
-	let pal = get_pal(filename, "");
-	mti.save(&mut OutputWriter::new(path, true), pal.as_deref());
+	mti.save(&mut OutputWriter::new(path, true), None);
 }
 
 fn parse_fti(path: &Path) {

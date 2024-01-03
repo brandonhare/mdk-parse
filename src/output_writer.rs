@@ -68,9 +68,11 @@ impl OutputWriter {
 	) -> png::Writer<impl std::io::Write> {
 		let path = self.set_output_path(asset_name, "png");
 		let mut encoder = setup_png(path, width, height, palette);
-		encoder.set_animated(num_frames, 0).unwrap();
-		encoder.set_sep_def_img(false).unwrap();
-		encoder.set_frame_delay(1, fps).unwrap();
+		if num_frames > 1 {
+			encoder.set_animated(num_frames, 0).unwrap();
+			encoder.set_sep_def_img(false).unwrap();
+			encoder.set_frame_delay(1, fps).unwrap();
+		}
 		encoder.write_header().unwrap()
 	}
 }

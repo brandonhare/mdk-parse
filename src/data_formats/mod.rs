@@ -5,4 +5,4 @@ mod wav;
 pub use bsp::Bsp;
 pub use mesh::Mesh;
 pub use texture::Texture;
-pub use wav::Wav;
+pub use wav::{SoundInfo, Wav};

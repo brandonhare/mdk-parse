@@ -147,7 +147,7 @@ impl<'a> Mesh<'a> {
 			let num_submeshes = reader.try_u32().filter(|n| *n < 100)? as usize;
 			let mut submeshes = Vec::with_capacity(num_submeshes);
 
-			for i in 0..num_submeshes {
+			for _ in 0..num_submeshes {
 				let name = reader.try_str(12)?;
 				let origin = reader.try_vec3()?.swizzle();
 				let mut mesh_data = MeshGeo::try_parse(reader)?;

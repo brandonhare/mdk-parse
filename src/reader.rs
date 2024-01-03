@@ -47,6 +47,7 @@ impl<'buf> Reader<'buf> {
 			let range = range.start + origin..range.end + origin;
 			READ_RANGE.with(|ranges| ranges.borrow_mut().insert(range));
 		}
+		let _ = range;
 	}
 
 	pub fn resize(&mut self, range: impl std::ops::RangeBounds<usize>) {

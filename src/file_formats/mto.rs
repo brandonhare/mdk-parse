@@ -1,8 +1,6 @@
-use crate::data_formats::{Bsp, Mesh, Wav};
-use crate::file_formats::{sni::SoundInfo, Mti};
-use crate::output_writer::OutputWriter;
-use crate::reader::Reader;
-use crate::{save_alienanim, try_parse_alienanim, AlienAnim};
+use crate::data_formats::{Bsp, Mesh, SoundInfo, Wav};
+use crate::file_formats::Mti;
+use crate::{save_alienanim, try_parse_alienanim, AlienAnim, OutputWriter, Reader};
 
 pub struct Mto<'a> {
 	pub filename: &'a str,
@@ -80,13 +78,19 @@ impl<'a> Mto<'a> {
 				}
 				for _ in 0..num_sounds {
 					let name = subfile_reader.str(12);
-					let sound_kind = subfile_reader.i32(); // todo
+					let sound_flags = subfile_reader.u32(); // todo
 					let sound_offset = subfile_reader.u32() as usize;
 					let sound_length = subfile_reader.u32() as usize;
 					let mut sound_reader =
 						subfile_reader.resized(sound_offset..sound_offset + sound_length);
 					let wav = Wav::parse(&mut sound_reader);
-					sounds.push((name, SoundInfo { wav, sound_kind }));
+					sounds.push((
+						name,
+						SoundInfo {
+							wav,
+							flags: sound_flags,
+						},
+					));
 				}
 			}
 

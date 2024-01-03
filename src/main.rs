@@ -1,5 +1,4 @@
 #![allow(dead_code)]
-#![allow(unused_variables)] // todo check
 #![warn(trivial_casts, trivial_numeric_casts, future_incompatible)]
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -16,7 +15,7 @@ mod gltf;
 mod output_writer;
 mod reader;
 mod vectors;
-use data_formats::{Bsp, Mesh, Wav};
+use data_formats::{Mesh, Texture, Wav};
 use file_formats::{Dti, Fti, Mti, Mto, Sni};
 use output_writer::OutputWriter;
 use reader::Reader;
@@ -116,22 +115,13 @@ impl<T> std::ops::DerefMut for NoDebug<T> {
 	}
 }
 
-#[derive(Debug)]
-struct Anim {
-	width: u16,
-	height: u16,
-	x: i16,
-	y: i16,
-	pixels: Vec<u8>,
-}
-
-fn try_parse_anim(reader: &mut Reader) -> Option<Vec<Anim>> {
+fn try_parse_anim(reader: &mut Reader) -> Option<Vec<Texture<'static>>> {
 	let mut data = reader.clone();
 	let filesize = data.try_u32()? as usize;
 	if filesize > data.remaining_len() {
 		return None;
 	}
-	data.rebase();
+	data.rebase_length(filesize);
 
 	let num_frames = data.try_u32()? as usize;
 	if num_frames > 1000 {
@@ -151,45 +141,44 @@ fn try_parse_anim(reader: &mut Reader) -> Option<Vec<Anim>> {
 		if width > 5000 || height > 5000 {
 			return None;
 		}
-		let [x, y]: [i16; 2] = data.try_get()?;
+		let x = data.try_i16()?;
+		let y = data.try_i16()?;
 
 		let mut pixels = vec![0; width as usize * height as usize];
-		'outer: for row in pixels.chunks_exact_mut(width as usize) {
+		'row_loop: for row in pixels.chunks_exact_mut(width as usize) {
 			let mut col_index = 0;
 			loop {
-				let count = data.try_u8()? as usize;
-				if count == 0xFF {
-					break 'outer;
-				}
-				if count == 0xFE {
-					break;
-				}
-				if count < 0x80 {
-					let count = count + 1;
-					if col_index + count > row.len() {
-						return None;
+				let count = data.try_u8()?;
+				match count {
+					0..=0x7F => {
+						let count = count as usize + 1;
+						if col_index + count > row.len() {
+							return None;
+						}
+						let pixels = data.try_slice(count)?;
+						row[col_index..col_index + count].copy_from_slice(pixels);
+						col_index += count;
 					}
-					let pixels = data.try_slice(count)?;
-					row[col_index..col_index + count].copy_from_slice(pixels);
-					col_index += count;
-				} else {
-					let count = count - 0x7C;
-					if col_index + count > row.len() {
-						return None;
+					0x80..=0xFD => {
+						let count = count as usize - 0x7C;
+						if col_index + count > row.len() {
+							return None;
+						}
+						let value = data.try_u8()?;
+						row[col_index..col_index + count].fill(value);
+						col_index += count;
 					}
-					let value = data.try_u8()?;
-					row[col_index..col_index + count].fill(value);
-					col_index += count;
+					0xFE => continue 'row_loop,
+					0xFF => break 'row_loop,
 				}
 			}
 		}
 
-		results.push(Anim {
+		results.push(Texture {
 			width,
 			height,
-			x,
-			y,
-			pixels,
+			pixels: pixels.into(),
+			position: (x, y),
 		});
 	}
 
@@ -204,7 +193,7 @@ thread_local! {
 }
 
 type PalRef<'a> = Option<&'a [u8]>;
-fn get_pal(filename: &str, name: &str) -> Option<Rc<[u8]>> {
+fn get_pal(filename: &str, _name: &str) -> Option<Rc<[u8]>> {
 	let temp: String;
 	let asset_name = match filename {
 		"STREAM.BNI" | "STREAM.MTI" => "STREAM",
@@ -391,7 +380,7 @@ fn parse_bni(path: &Path) {
 			continue;
 		}
 		if name.starts_with("ZOOM00") {
-			zooms.push(parse_zoom(name, data, &mut output));
+			zooms.push(parse_zoom(&mut reader));
 			continue;
 		}
 
@@ -421,9 +410,9 @@ fn parse_bni(path: &Path) {
 		}
 
 		if let Some(anims) = try_parse_anim(&mut reader) {
-			save_anim(
-				name,
+			Texture::save_animated(
 				&anims,
+				name,
 				if name == "PICKUPS" { 2 } else { 24 },
 				&mut output,
 				get_pal(filename, name).as_deref(),
@@ -465,53 +454,36 @@ fn parse_bni(path: &Path) {
 	}
 
 	if !zooms.is_empty() {
-		save_zoom(
-			"ZOOM",
+		Texture::save_animated(
 			&zooms,
+			"ZOOM",
+			24,
 			&mut output,
 			get_pal(filename, "ZOOM").as_deref(),
 		); // todo palette
 	}
 }
 
-fn parse_zoom(name: &str, data: &[u8], output: &mut OutputWriter) -> Vec<u8> {
-	let mut reader = Reader::new(data);
-	let filesize = reader.u32();
-	reader.resize(4..4 + filesize as usize);
+fn parse_zoom(reader: &mut Reader) -> Texture<'static> {
+	let filesize = reader.u32() as usize;
+	let end_pos = reader.position() + filesize;
+	let mut pixels = Vec::with_capacity(600 * 180);
 
-	let mut result = Vec::new();
+	while reader.position() < end_pos {
+		let num_pixels1 = reader.u32() as usize;
+		let pixels1 = reader.slice(num_pixels1 * 4);
+		pixels.extend_from_slice(pixels1);
 
-	while reader.position() < reader.len() {
-		let count = reader.u32();
-		let data1 = reader.slice(count as usize * 4);
-		result.extend_from_slice(data1);
+		let num_zeroes = reader.u32() as usize;
+		pixels.resize(pixels.len() + num_zeroes * 4, 0);
 
-		let a = reader.u32();
-		result.resize(result.len() + a as usize * 4, 0);
-
-		let b = reader.u32();
-		if a != 0 || b != 0 {
-			let data2 = reader.slice(b as usize * 4);
-			result.extend_from_slice(data2);
-		}
+		let num_pixels2 = reader.u32() as usize;
+		let pixels2 = reader.slice(num_pixels2 * 4);
+		pixels.extend_from_slice(pixels2);
 	}
+	assert_eq!(reader.position(), end_pos);
 
-	result
-}
-
-fn save_zoom(name: &str, data: &[Vec<u8>], output: &mut OutputWriter, pal: PalRef) {
-	let anims: Vec<_> = data
-		.iter()
-		.cloned()
-		.map(|pixels| Anim {
-			width: 600,
-			height: 180,
-			x: 0,
-			y: 0,
-			pixels,
-		})
-		.collect();
-	save_anim(name, &anims, 24, output, pal);
+	Texture::new(600, 180, pixels)
 }
 
 fn parse_overlay(name: &str, data: &[u8], output: &mut OutputWriter, pal: PalRef) {
@@ -633,7 +605,7 @@ fn try_parse_alienanim(mut data: Reader<'_>) -> Option<AlienAnim<'_>> {
 			// don't swizzle until after processing
 
 			// transforms
-			for frame_index in 0..num_frames {
+			for _ in 0..num_frames {
 				let transform = data.try_get::<[[i16; 4]; 3]>()?;
 				let [r1, r2, r3] = transform.map(|[x, y, z, w]| {
 					[
@@ -761,7 +733,6 @@ fn save_alienanim(name: &str, anim: &AlienAnim, output: &mut OutputWriter) {
 	let num_frames = anim.num_frames();
 
 	let fps = 30.0;
-	let time_period = anim.speed / fps;
 
 	let mut gltf = gltf::Gltf::new(name.into());
 	let cube_mesh = Some(gltf.get_cube_mesh());
@@ -988,136 +959,6 @@ fn parse_cmi(path: &Path) {
 		}
 		output.write("paths", "txt", summary.as_bytes());
 	}
-}
-
-struct FontLetter<'a> {
-	code: u8,
-	width: u8,
-	height: u8,
-	pixels: &'a [u8],
-}
-fn parse_font_letters(mut data: Reader) -> Vec<FontLetter> {
-	let mut result = Vec::with_capacity(256);
-	for i in 0..=255 {
-		let offset = data.u32();
-		if offset == 0 {
-			continue;
-		}
-		let mut data = data.clone_at(offset as usize);
-
-		let height_base = data.i8();
-		let height_offset = data.i8();
-		let height = (height_base + height_offset + 1) as u8;
-		let width = data.u8();
-
-		let pixels = data.slice(width as usize * height as usize);
-
-		result.push(FontLetter {
-			code: i,
-			width,
-			height,
-			pixels,
-		});
-	}
-	result
-}
-
-fn save_font_grid(name: &str, letters: &[FontLetter], output: &mut OutputWriter, pal: PalRef) {
-	let (cell_width, cell_height, max_code) =
-		letters.iter().fold((0, 0, 0), |(w, h, c), letter| {
-			(
-				w.max(letter.width as usize),
-				h.max(letter.height as usize),
-				c.max(letter.code),
-			)
-		});
-	assert!(
-		cell_width > 0 && cell_height > 0 && max_code > 0,
-		"invalid font dimensions!"
-	);
-
-	let cells_per_row = 16;
-	let num_rows = (max_code as usize).div_ceil(cells_per_row);
-
-	let row_width = cell_width * cells_per_row;
-	let row_stride = row_width * cell_height;
-
-	let mut result = vec![0; num_rows * row_stride];
-
-	for letter in letters {
-		let col_index = letter.code as usize % cells_per_row;
-		let row_index = letter.code as usize / cells_per_row;
-		let result = &mut result[row_index * row_stride + col_index * cell_width..];
-		for (dest, src) in result
-			.chunks_mut(row_width)
-			.zip(letter.pixels.chunks_exact(letter.width as usize))
-		{
-			dest[..letter.width as usize].copy_from_slice(src);
-		}
-	}
-	output.write_png(
-		name,
-		row_width as u32,
-		(num_rows * cell_height) as u32,
-		&result,
-		pal,
-	)
-}
-
-fn save_anim(name: &str, frames: &[Anim], fps: u16, output: &mut OutputWriter, palette: PalRef) {
-	let num_frames = frames.len();
-	if frames.len() == 1 {
-		let image = &frames[0];
-		output.write_png(
-			name,
-			image.width as u32,
-			image.height as u32,
-			&image.pixels,
-			palette,
-		);
-		return;
-	}
-	assert_ne!(num_frames, 0);
-
-	let mut offset_x = 0;
-	let mut offset_y = 0;
-	let mut max_x = 0;
-	let mut max_y = 0;
-	for frame in frames {
-		offset_x = offset_x.max(frame.x as isize);
-		offset_y = offset_y.max(frame.y as isize);
-		max_x = max_x.max(frame.width as isize - frame.x as isize);
-		max_y = max_y.max(frame.height as isize - frame.y as isize);
-	}
-
-	let width = (max_x + offset_x) as usize;
-	let height = (max_y + offset_y) as usize;
-
-	let mut encoder = output.start_animated_png(
-		name,
-		width as u32,
-		height as u32,
-		fps,
-		num_frames as u32,
-		palette,
-	);
-
-	let mut buffer = vec![0; width * height];
-	for anim in frames {
-		buffer.fill(0);
-		let offset_x = (offset_x - (anim.x as isize)) as usize;
-		for (dest, src) in buffer
-			.chunks_exact_mut(width)
-			.skip((offset_y - anim.y as isize) as usize)
-			.zip(anim.pixels.chunks_exact(anim.width as usize))
-		{
-			dest[offset_x..offset_x + src.len()].copy_from_slice(src);
-		}
-		encoder
-			.write_image_data(&buffer)
-			.expect("failed to write png image data");
-	}
-	encoder.finish().expect("failed to write png file");
 }
 
 #[derive(Debug, Clone)]

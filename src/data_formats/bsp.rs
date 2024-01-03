@@ -1,10 +1,5 @@
-use crate::{
-	data_formats::mesh::{MeshGeo, MeshTri},
-	gltf,
-	output_writer::OutputWriter,
-	reader::Reader,
-	Vec3,
-};
+use crate::data_formats::mesh::{MeshGeo, MeshTri};
+use crate::{gltf, OutputWriter, Reader, Vec3};
 
 #[derive(Debug)]
 pub struct BspPlane {

@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
-use crate::{data_formats::Wav, output_writer::OutputWriter, reader::Reader, try_parse_anim, Anim};
+use crate::data_formats::{Texture, Wav};
+use crate::{try_parse_anim, OutputWriter, Reader};
 
 pub struct FontLetter<Pixels: AsRef<[u8]>> {
 	pub code: u8,
@@ -10,7 +11,7 @@ pub struct FontLetter<Pixels: AsRef<[u8]>> {
 }
 
 pub struct Fti<'a> {
-	pub arrow: Anim,
+	pub arrow: Texture<'a>,
 	pub palette: &'a [u8],
 	pub snd_push: Option<Wav<'a>>,
 	pub font_big: Vec<FontLetter<&'a [u8]>>,

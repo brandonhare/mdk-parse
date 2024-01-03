@@ -1,4 +1,5 @@
-use crate::{data_formats::Texture, output_writer::OutputWriter, Reader};
+use crate::data_formats::Texture;
+use crate::{output_writer::OutputWriter, Reader};
 
 #[derive(Debug)]
 pub enum Material<'a> {
@@ -86,29 +87,17 @@ impl<'a> Mti<'a> {
 				let pixels = entry_reader.slice(frame_size);
 				materials.push((
 					name,
-					Material::Texture(
-						Texture {
-							width,
-							height,
-							pixels: pixels.into(),
-						},
-						matflags,
-					),
+					Material::Texture(Texture::new(width, height, pixels), matflags),
 				));
 			} else if flags_mask == 0x10000 {
 				// animated sequence
 				let frames = (0..num_frames)
-					.map(|_| Texture {
-						width,
-						height,
-						pixels: entry_reader.slice(frame_size).into(),
-					})
+					.map(|_| Texture::new(width, height, entry_reader.slice(frame_size)))
 					.collect();
 				materials.push((name, Material::AnimatedTexture(frames, matflags)));
 			} else {
-				// compressed animation
-				let frames =
-					parse_compressed_animation(&mut entry_reader, width, height, num_frames);
+				// overlay animation
+				let frames = parse_overlay_animation(&mut entry_reader, width, height, num_frames);
 				materials.push((name, Material::AnimatedTexture(frames, matflags)));
 			}
 		}
@@ -168,17 +157,13 @@ impl<'a> Mti<'a> {
 	}
 }
 
-fn parse_compressed_animation<'a>(
+fn parse_overlay_animation<'a>(
 	data: &mut Reader<'a>, width: u16, height: u16, num_frames: usize,
 ) -> Vec<Texture<'a>> {
 	let base_pixels = data.slice(width as usize * height as usize);
 
 	let mut frames: Vec<Texture> = Vec::with_capacity(num_frames + 1);
-	frames.push(Texture {
-		width,
-		height,
-		pixels: base_pixels.into(),
-	});
+	frames.push(Texture::new(width, height, base_pixels));
 
 	let _runtime_anim_time = data.u32();
 
@@ -203,11 +188,7 @@ fn parse_compressed_animation<'a>(
 			dest_pixel_offset += chunk_size + output_offset;
 		}
 
-		frames.push(Texture {
-			width,
-			height,
-			pixels: dest_pixels.into(),
-		});
+		frames.push(Texture::new(width, height, dest_pixels));
 	}
 
 	if frames.first() == frames.last() {

@@ -1,4 +1,4 @@
-use crate::{gltf, output_writer::OutputWriter, vectors::Vec3, Reader};
+use crate::{gltf, OutputWriter, Reader, Vec3};
 
 pub struct Animation<'a> {
 	pub speed: f32,
@@ -19,7 +19,7 @@ impl<'a> Animation<'a> {
 
 		let num_parts = data.try_u32()? as usize;
 		let num_frames = data.try_u32()? as usize;
-		if num_parts > 1000 || num_frames > 1000 {
+		if num_parts == 0 || num_parts > 1000 || num_frames == 0 || num_frames > 1000 {
 			return None;
 		}
 

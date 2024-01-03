@@ -1,12 +1,14 @@
 mod animation;
 mod bsp;
 pub mod cmi_bytecode;
+pub mod image_formats;
 pub mod mesh;
 mod spline;
 mod texture;
 mod wav;
 pub use animation::Animation;
 pub use bsp::Bsp;
+pub use image_formats::try_parse_animation;
 pub use mesh::Mesh;
 pub use spline::Spline;
 pub use texture::Texture;

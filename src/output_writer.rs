@@ -4,8 +4,6 @@ use std::{
 	path::{Path, PathBuf},
 };
 
-use crate::PalRef;
-
 #[derive(Clone, Debug)]
 pub struct OutputWriter {
 	path: PathBuf,
@@ -77,7 +75,7 @@ impl OutputWriter {
 	}
 }
 
-fn save_png(path: &Path, data: &[u8], width: u32, height: u32, palette: PalRef) {
+fn save_png(path: &Path, data: &[u8], width: u32, height: u32, palette: Option<&[u8]>) {
 	let mut encoder = setup_png(path, width, height, palette)
 		.write_header()
 		.unwrap();

@@ -1,5 +1,5 @@
 use crate::data_formats::Texture;
-use crate::{output_writer::OutputWriter, Reader};
+use crate::{OutputWriter, Reader};
 
 #[derive(Debug)]
 pub enum Material<'a> {

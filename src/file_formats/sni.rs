@@ -1,5 +1,5 @@
-use crate::data_formats::{Bsp, SoundInfo, Texture, Wav};
-use crate::{try_parse_anim, OutputWriter, Reader};
+use crate::data_formats::{try_parse_animation, Bsp, SoundInfo, Texture, Wav};
+use crate::{OutputWriter, Reader};
 
 #[derive(Debug)]
 pub struct Sni<'a> {
@@ -39,7 +39,8 @@ impl<'a> Sni<'a> {
 			let mut entry_reader = reader.resized(entry_offset..entry_offset + entry_size);
 
 			if entry_type == u32::MAX {
-				let anim = try_parse_anim(&mut entry_reader).expect("failed to parse sni anim");
+				let anim =
+					try_parse_animation(&mut entry_reader).expect("failed to parse sni anim");
 				anims.push((entry_name, anim));
 			} else if entry_type == 0 {
 				let bsp = Bsp::parse(&mut entry_reader);

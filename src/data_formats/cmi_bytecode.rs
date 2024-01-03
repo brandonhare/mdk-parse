@@ -1,6 +1,6 @@
-use crate::{Reader, Vec3};
-
 use std::fmt::Write;
+
+use crate::{Reader, Vec3};
 
 struct FlagNames<'a> {
 	names: &'a [(u32, &'a str)],

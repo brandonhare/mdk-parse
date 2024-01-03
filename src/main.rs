@@ -3,7 +3,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::OsStr;
-use std::fmt::Write;
 use std::fs::{self, DirEntry};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -14,7 +13,7 @@ mod gltf;
 mod output_writer;
 mod reader;
 mod vectors;
-use data_formats::{Mesh, Texture, Wav};
+use data_formats::{Animation, Mesh, Texture, Wav};
 use file_formats::{Cmi, Dti, Fti, Mti, Mto, Sni};
 use output_writer::OutputWriter;
 use reader::Reader;
@@ -429,8 +428,8 @@ fn parse_bni(path: &Path) {
 			continue;
 		}
 
-		if let Some(anim) = try_parse_alienanim(reader.clone()) {
-			save_alienanim(name, &anim, &mut output);
+		if let Some(anim) = Animation::try_parse(&mut reader.clone()) {
+			anim.save_as(name, &mut output);
 			continue;
 		}
 
@@ -534,252 +533,6 @@ fn try_parse_image(name: &str, buffer: &[u8], output: &mut OutputWriter) -> bool
 	let pixels = reader.slice(num_pixels);
 	output.write_png(name, width as u32, height as u32, pixels, Some(palette));
 	true
-}
-
-struct AlienAnim<'a> {
-	speed: f32,
-	target_vectors: Vec<Vec3>, // todo what exactly are these?
-	reference_points: Vec<Vec<Vec3>>,
-	parts: Vec<AlienAnimPart<'a>>,
-}
-struct AlienAnimPart<'a> {
-	name: &'a str,
-	point_paths: Vec<Vec<Vec3>>,
-}
-impl<'a> AlienAnim<'a> {
-	fn num_frames(&self) -> usize {
-		self.target_vectors.len()
-	}
-}
-
-fn try_parse_alienanim(mut data: Reader<'_>) -> Option<AlienAnim<'_>> {
-	let speed = data.try_f32()?;
-
-	data.resize(data.position()..);
-
-	let num_parts = data.try_u32()? as usize;
-	let num_frames = data.try_u32()? as usize;
-	if num_parts > 1000 || num_frames > 1000 {
-		return None;
-	}
-
-	let part_offsets = data.try_get_vec::<u32>(num_parts)?;
-	if part_offsets.iter().any(|o| *o as usize >= data.len()) {
-		return None;
-	}
-
-	let mut target_vectors = Vec3::swizzle_vec(data.try_get_vec::<Vec3>(num_frames)?);
-	for i in 1..target_vectors.len() {
-		// todo added in gameplay
-		target_vectors[i] = target_vectors[i] + target_vectors[i - 1];
-	}
-
-	let num_reference_points = data.try_u32()? as usize;
-	if num_reference_points > 8 || num_reference_points * num_frames * 12 > data.remaining_len() {
-		return None;
-	}
-	let mut reference_points: Vec<Vec<Vec3>> = Vec::with_capacity(num_reference_points);
-	for _ in 0..num_reference_points {
-		let points_path = Vec3::swizzle_vec(data.try_get_vec::<Vec3>(num_frames)?);
-		reference_points.push(points_path);
-	}
-
-	let mut parts = Vec::with_capacity(num_parts);
-	for &offset in &part_offsets {
-		let mut data = data.clone_at(offset as usize);
-		let part_name = data.try_str(12)?;
-		let num_points = data.try_u32()? as usize;
-		if num_points > 1000 {
-			return None;
-		}
-		let scale = data.try_f32()?;
-		let mut point_paths: Vec<Vec<Vec3>> = Vec::new();
-		point_paths.resize_with(num_points, || Vec::with_capacity(num_frames));
-
-		if scale == 0.0 {
-			let scale_vec = 1.0 / (0x8000u32 >> (data.try_u8()? & 0x3F)) as f32;
-			let scale_pos = 1.0 / (0x8000u32 >> (data.try_u8()? & 0x3F)) as f32;
-			// origin points
-			let origin_points = data.try_get_vec::<Vec3>(num_points)?;
-			// don't swizzle until after processing
-
-			// transforms
-			for _ in 0..num_frames {
-				let transform = data.try_get::<[[i16; 4]; 3]>()?;
-				let [r1, r2, r3] = transform.map(|[x, y, z, w]| {
-					[
-						x as f32 * scale_vec,
-						y as f32 * scale_vec,
-						z as f32 * scale_vec,
-						w as f32 * scale_pos,
-					]
-				});
-				for (path, &Vec3 { x, y, z }) in point_paths.iter_mut().zip(&origin_points) {
-					path.push(
-						Vec3::from([
-							r1[0] * x + r1[1] * y + r1[2] * z + r1[3],
-							r2[0] * x + r2[1] * y + r2[2] * z + r2[3],
-							r3[0] * x + r3[1] * y + r3[2] * z + r3[3],
-						])
-						.swizzle(),
-					)
-				}
-			}
-		} else {
-			// origin points
-			for path in &mut point_paths {
-				path.push(data.try_vec3()?.swizzle());
-			}
-			// frames
-			for _ in 0..num_frames {
-				let frame_index = data.try_u16()? as usize;
-				if frame_index > num_frames {
-					break;
-				}
-
-				for path in &mut point_paths {
-					if frame_index < path.len() {
-						return None; // frames out of order
-					}
-					let prev = *path.last().unwrap();
-					path.resize(frame_index, prev); // duplicate potential gaps so our timeline is full
-
-					let pos = data.try_get::<[i8; 3]>()?;
-					let pos = Vec3::from(pos.map(|i| i as f32 * scale)).swizzle();
-					path.push(prev + pos);
-				}
-
-				if frame_index == num_frames {
-					assert_eq!(data.u16(), 0xFFFF);
-					break;
-				}
-			}
-		}
-
-		for path in &mut point_paths {
-			assert!(path.len() <= num_frames);
-			path.resize(num_frames, *path.last().unwrap()); // duplicate until the end of the timeline
-		}
-
-		parts.push(AlienAnimPart {
-			name: part_name,
-			point_paths,
-		});
-	}
-
-	Some(AlienAnim {
-		speed,
-		target_vectors,
-		reference_points,
-		parts,
-	})
-}
-
-fn save_alienanim_text(name: &str, anim: &AlienAnim, output: &mut OutputWriter) {
-	let mut result = format!(
-		"name: {name}\nspeed: {}\nnum frames: {}\n",
-		anim.speed,
-		anim.num_frames(),
-	);
-
-	writeln!(
-		result,
-		"\nreference points ({}):",
-		anim.reference_points.len()
-	)
-	.unwrap();
-	for (i, path) in anim.reference_points.iter().enumerate() {
-		writeln!(result, "\tpoint {i} ({} frames):", path.len()).unwrap();
-		for (j, point) in path.iter().enumerate() {
-			writeln!(result, "\t\t[frame {j:2}] {point:?}").unwrap();
-		}
-	}
-
-	writeln!(result, "\ntarget vectors ({}):", anim.target_vectors.len()).unwrap();
-	for (i, target) in anim
-		.target_vectors
-		.iter()
-		.scan(Vec3::default(), |acc, item| {
-			*acc += *item;
-			Some(*acc)
-		})
-		.enumerate()
-	{
-		writeln!(result, "\t[{i}] {target:?}").unwrap();
-	}
-
-	writeln!(result, "\nparts ({}):", anim.parts.len()).unwrap();
-	for (part_index, part) in anim.parts.iter().enumerate() {
-		writeln!(
-			result,
-			"\t[part {part_index}] {} ({} points):",
-			part.name,
-			part.point_paths.len()
-		)
-		.unwrap();
-		for (point_index, path) in part.point_paths.iter().enumerate() {
-			writeln!(result, "\t\t[point {point_index}]").unwrap();
-			for (i, pos) in path.iter().enumerate() {
-				writeln!(result, "\t\t\t[frame {i:2}] {pos:?}").unwrap();
-			}
-		}
-	}
-
-	output.write(name, "anim.txt", result.as_bytes());
-}
-
-fn save_alienanim(name: &str, anim: &AlienAnim, output: &mut OutputWriter) {
-	let num_frames = anim.num_frames();
-
-	let fps = 30.0;
-
-	let mut gltf = gltf::Gltf::new(name.into());
-	let cube_mesh = Some(gltf.get_cube_mesh());
-	let animation = gltf.create_animation(name.into());
-	let root_node = gltf.get_root_node();
-	let base_timestamps = gltf.create_animation_timestamps(num_frames, fps / anim.speed);
-	let interpolation = Some(gltf::AnimationInterpolationMode::Step);
-
-	if anim.target_vectors.iter().any(|p| *p != Vec3::default()) {
-		let node = gltf.create_child_node(root_node, "Target Vectors".into(), cube_mesh);
-		gltf.add_animation_translation(
-			animation,
-			node,
-			base_timestamps,
-			&anim.target_vectors,
-			interpolation,
-		);
-	}
-
-	if anim
-		.reference_points
-		.iter()
-		.any(|p| p.iter().any(|p| *p != Vec3::default()))
-	{
-		let ref_node = gltf.create_child_node(root_node, "Reference Points".into(), None);
-		for (i, path) in anim.reference_points.iter().enumerate() {
-			let node = gltf.create_child_node(ref_node, i.to_string(), cube_mesh);
-			gltf.add_animation_translation(animation, node, base_timestamps, path, interpolation);
-		}
-	}
-
-	for part in &anim.parts {
-		let part_node = gltf.create_child_node(root_node, part.name.into(), None);
-		for (i, path) in part.point_paths.iter().enumerate() {
-			let point_node = gltf.create_child_node(part_node, i.to_string(), cube_mesh);
-			gltf.add_animation_translation(
-				animation,
-				point_node,
-				base_timestamps,
-				path,
-				interpolation,
-			);
-		}
-	}
-
-	output.write(name, "anim.gltf", gltf.render_json().as_bytes());
-
-	//save_alienanim_text(name, anim, output);
 }
 
 fn parse_lbb(path: &Path) {

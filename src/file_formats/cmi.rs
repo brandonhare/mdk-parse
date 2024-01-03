@@ -1,14 +1,14 @@
 use std::fmt::Write;
 
-use crate::data_formats::{cmi_bytecode, Mesh, Spline};
-use crate::{save_alienanim, try_parse_alienanim, AlienAnim, OutputWriter, Reader};
+use crate::data_formats::{cmi_bytecode, Animation, Mesh, Spline};
+use crate::{OutputWriter, Reader};
 
 pub struct Cmi<'a> {
 	pub filename: &'a str,
 	pub arenas: Vec<CmiArena<'a>>,
 	pub scripts: Vec<(&'a str, String)>,
 	pub meshes: Vec<(&'a str, Option<Mesh<'a>>)>,
-	pub animations: Vec<(u32, AlienAnim<'a>)>,
+	pub animations: Vec<(u32, Animation<'a>)>,
 	pub splines: Vec<(u32, Spline)>,
 }
 
@@ -118,7 +118,7 @@ impl<'a> Cmi<'a> {
 			.map(|&offset| {
 				(
 					offset,
-					try_parse_alienanim(reader.clone_at(offset as usize)).unwrap(),
+					Animation::parse(&mut reader.resized(offset as usize..)),
 				)
 			})
 			.collect();
@@ -191,7 +191,7 @@ impl<'a> Cmi<'a> {
 			for (offset, anim) in &self.animations {
 				temp.clear();
 				write!(temp, "{offset:06X}").unwrap();
-				save_alienanim(&temp, anim, &mut output);
+				anim.save_as(&temp, &mut output);
 			}
 		}
 

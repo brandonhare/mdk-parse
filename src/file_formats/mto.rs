@@ -1,6 +1,6 @@
-use crate::data_formats::{Bsp, Mesh, SoundInfo, Wav};
+use crate::data_formats::{Animation, Bsp, Mesh, SoundInfo, Wav};
 use crate::file_formats::Mti;
-use crate::{save_alienanim, try_parse_alienanim, AlienAnim, OutputWriter, Reader};
+use crate::{OutputWriter, Reader};
 
 pub struct Mto<'a> {
 	pub filename: &'a str,
@@ -9,7 +9,7 @@ pub struct Mto<'a> {
 
 pub struct MtoArena<'a> {
 	pub name: &'a str,
-	pub animations: Vec<(&'a str, AlienAnim<'a>)>,
+	pub animations: Vec<(&'a str, Animation<'a>)>,
 	pub meshes: Vec<(&'a str, Mesh<'a>)>,
 	pub sounds: Vec<(&'a str, SoundInfo<'a>)>,
 	pub bsp: Bsp<'a>,
@@ -42,9 +42,9 @@ impl<'a> Mto<'a> {
 			let bsp_offset = arena_reader.u32() as usize;
 			let matfile_offset = arena_reader.position();
 
-			let mut animations: Vec<(&str, AlienAnim<'a>)>;
-			let mut meshes: Vec<(&str, Mesh<'a>)>;
-			let mut sounds: Vec<(&str, SoundInfo<'a>)>;
+			let mut animations;
+			let mut meshes;
+			let mut sounds;
 			{
 				// parse subfile
 				arena_reader.set_position(subfile_offset);
@@ -63,7 +63,7 @@ impl<'a> Mto<'a> {
 					let name = subfile_reader.str(8);
 					let offset = subfile_reader.u32() as usize;
 
-					let anim = try_parse_alienanim(subfile_reader.resized(offset..)).unwrap();
+					let anim = Animation::parse(&mut subfile_reader.resized(offset..));
 					animations.push((name, anim));
 				}
 				for _ in 0..num_meshes {
@@ -131,24 +131,24 @@ impl<'a> Mto<'a> {
 			let mut output = output.push_dir(arena.name);
 
 			if !arena.animations.is_empty() {
-				let mut anim_output = output.push_dir("animations");
+				let mut output = output.push_dir("animations");
 				for (name, anim) in &arena.animations {
-					save_alienanim(name, anim, &mut anim_output);
+					anim.save_as(name, &mut output);
 				}
 			}
 			if !arena.meshes.is_empty() {
-				let mut mesh_output = output.push_dir("meshes");
+				let mut output = output.push_dir("meshes");
 				for (name, mesh) in &arena.meshes {
-					mesh.save_as(name, &mut mesh_output);
+					mesh.save_as(name, &mut output);
 				}
 			}
 			if !arena.sounds.is_empty() {
-				let mut sound_output = output.push_dir("sounds");
+				let mut output = output.push_dir("sounds");
 				for (name, sound_info) in &arena.sounds {
-					sound_info.save_as(name, &mut sound_output);
+					sound_info.save_as(name, &mut output);
 				}
 				let sound_summary = SoundInfo::create_report_tsv(&arena.sounds);
-				sound_output.write("sounds", "tsv", &sound_summary);
+				output.write("sounds", "tsv", &sound_summary);
 			}
 
 			arena.bsp.save_as(arena.name, &mut output);

@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use std::ops::{Add, AddAssign, Deref, DerefMut, Mul, MulAssign, Sub, SubAssign};
 
 pub type Vec2 = [f32; 2];
@@ -107,6 +108,17 @@ impl DerefMut for Vec3 {
 	}
 }
 
+impl std::fmt::Display for Vec3 {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.write_char('(')?;
+		std::fmt::Display::fmt(&self.x, f)?;
+		f.write_str(", ")?;
+		std::fmt::Display::fmt(&self.y, f)?;
+		f.write_str(", ")?;
+		std::fmt::Display::fmt(&self.z, f)?;
+		f.write_char(')')
+	}
+}
 impl std::fmt::Debug for Vec3 {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		f.debug_tuple("Vec3")

@@ -8,7 +8,6 @@ use std::fs::{self, DirEntry};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-mod cmi_bytecode;
 mod data_formats;
 mod file_formats;
 mod gltf;
@@ -16,7 +15,7 @@ mod output_writer;
 mod reader;
 mod vectors;
 use data_formats::{Mesh, Texture, Wav};
-use file_formats::{Dti, Fti, Mti, Mto, Sni};
+use file_formats::{Cmi, Dti, Fti, Mti, Mto, Sni};
 use output_writer::OutputWriter;
 use reader::Reader;
 use vectors::{Vec2, Vec3};
@@ -793,174 +792,6 @@ fn parse_lbb(path: &Path) {
 	assert!(success);
 }
 
-struct PathDataEntry {
-	t: i32,
-	pos1: Vec3,
-	pos2: Vec3,
-	pos3: Vec3,
-}
-
-fn read_path_data(mut reader: Reader) -> Vec<PathDataEntry> {
-	let count = reader.u32();
-	(0..count)
-		.map(|_| {
-			let t = reader.i32();
-			let pos1 = reader.vec3();
-			let pos2 = reader.vec3();
-			let pos3 = reader.vec3();
-			PathDataEntry {
-				t,
-				pos1,
-				pos2,
-				pos3,
-			}
-		})
-		.collect()
-}
-
-fn parse_cmi(path: &Path) {
-	let buf = read_file(path);
-	let mut data = Reader::new(&buf);
-
-	let filesize = data.u32() + 4;
-	assert_eq!(data.len(), filesize as usize, "filesize does not match");
-	data.resize(4..);
-
-	let filename = data.str(12);
-	let filesize2 = data.u32();
-	assert_eq!(filesize, filesize2 + 12, "filesizes do not match");
-
-	let mut init_entries = Vec::new();
-	let mut mesh_entries = Vec::new();
-	let mut setup_entries = Vec::new();
-	let mut arena_entries = Vec::new();
-
-	// read offsets
-	for entries in [
-		&mut init_entries,
-		&mut mesh_entries,
-		&mut setup_entries,
-		&mut arena_entries,
-	] {
-		let count = data.u32();
-		entries.extend((0..count).map(|_| {
-			let name = data.pascal_str();
-			let offset = data.u32();
-			if offset == 0 {
-				// mesh entries
-				(name, data.resized(..0))
-			} else {
-				let data = data.clone_at(offset as usize);
-				(name, data)
-			}
-		}));
-	}
-
-	let mut output = OutputWriter::new(path, true);
-
-	let mut cmi_offsets = cmi_bytecode::CmiOffsets::default();
-
-	// process init entries
-	{
-		let mut init_output = None;
-		for (name, mut data) in init_entries {
-			let cmi = cmi_bytecode::parse_cmi(filename, name, &mut data, &mut cmi_offsets);
-			let init_output = init_output.get_or_insert_with(|| output.push_dir("init"));
-			init_output.write(name, "txt", cmi.as_bytes());
-		}
-	}
-
-	// process mesh entries
-	{
-		let mut mesh_output = output.push_dir("meshes");
-		let mut empty = String::new();
-		for (name, mut data) in mesh_entries {
-			if data.is_empty() {
-				empty.push_str(name);
-				empty.push('\n');
-				continue;
-			}
-			let is_multimesh = data.u32();
-			assert!(is_multimesh <= 1, "invalid multimesh type {is_multimesh}");
-			let mesh = Mesh::parse(&mut data, is_multimesh != 0);
-			mesh.save_as(name, &mut mesh_output);
-		}
-		if !empty.is_empty() {
-			mesh_output.write("others", "txt", empty.as_bytes());
-		}
-	}
-
-	// process setup entries
-	{
-		let mut setup_output = output.push_dir("setup");
-		for (name, mut data) in setup_entries {
-			let cmi = cmi_bytecode::parse_cmi(filename, name, &mut data, &mut cmi_offsets);
-			setup_output.write(name, "txt", cmi.as_bytes());
-		}
-	}
-
-	// process arena_entries
-	{
-		let mut arena_output = output.push_dir("arenas");
-		for (name, mut data) in arena_entries {
-			let str1 = data.pascal_str();
-			let music = data.pascal_str();
-			let offset = data.u32() as usize;
-
-			data.set_position(offset);
-			let cmi = cmi_bytecode::parse_cmi(filename, name, &mut data, &mut cmi_offsets);
-			arena_output.write(
-				name,
-				"txt",
-				format!("name: {name}, music 1: \"{str1}\", music 2: \"{music}\"\n\n{cmi}")
-					.as_bytes(),
-			);
-		}
-	}
-
-	// save anims
-	{
-		let mut anim_output = output.push_dir("anims");
-		let anim_offsets = &mut cmi_offsets.anim_offsets;
-		anim_offsets.sort_unstable();
-		anim_offsets.dedup();
-		for &offset in anim_offsets.iter() {
-			let name = format!("{offset:06X}");
-			let anim_reader = data.resized(offset as usize..);
-			if let Some(anim) = try_parse_alienanim(anim_reader) {
-				save_alienanim(&name, &anim, &mut anim_output)
-			} else {
-				eprintln!("{filename}/{name} failed to parse alienanim at offset {offset:06X}");
-			}
-		}
-	}
-	// save paths
-	{
-		let path_offsets = &mut cmi_offsets.path_offsets;
-		path_offsets.sort_unstable();
-		path_offsets.dedup();
-		let mut summary = String::new();
-		for &offset in path_offsets.iter() {
-			if offset == 0 {
-				eprintln!("invalid path offset in {filename}");
-				continue;
-			}
-			let path = read_path_data(data.clone_at(offset as usize));
-			writeln!(summary, "path {offset:06X} ({})", path.len()).unwrap();
-			for row in &path {
-				writeln!(
-					summary,
-					"\t[{:3}] {:?}, {:?}, {:?}",
-					row.t, row.pos1, row.pos2, row.pos3
-				)
-				.unwrap();
-			}
-			summary.push('\n');
-		}
-		output.write("paths", "txt", summary.as_bytes());
-	}
-}
-
 #[derive(Debug, Clone)]
 struct ImageRef {
 	name: String,
@@ -1094,6 +925,12 @@ fn parse_mti(path: &Path) {
 	let file = read_file(path);
 	let mti = Mti::parse(&mut Reader::new(&file));
 	mti.save(&mut OutputWriter::new(path, true), None);
+}
+
+fn parse_cmi(path: &Path) {
+	let file = read_file(path);
+	let cmi = Cmi::parse(&mut Reader::new(&file));
+	cmi.save(&mut OutputWriter::new(path, true));
 }
 
 fn parse_fti(path: &Path) {

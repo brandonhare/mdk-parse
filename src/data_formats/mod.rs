@@ -1,8 +1,11 @@
 mod bsp;
+pub mod cmi_bytecode;
 pub mod mesh;
+mod spline;
 mod texture;
 mod wav;
 pub use bsp::Bsp;
 pub use mesh::Mesh;
+pub use spline::Spline;
 pub use texture::Texture;
 pub use wav::{SoundInfo, Wav};

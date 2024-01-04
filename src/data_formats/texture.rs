@@ -98,12 +98,3 @@ impl<'a> Texture<'a> {
 		encoder.finish().expect("failed to write png file");
 	}
 }
-
-impl<'a> std::fmt::Debug for Texture<'a> {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		f.debug_struct("Texture")
-			.field("width", &self.width)
-			.field("height", &self.height)
-			.finish()
-	}
-}

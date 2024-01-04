@@ -1,6 +1,10 @@
 use crate::data_formats::Texture;
 use crate::Reader;
 
+pub fn parse_animation(reader: &mut Reader) -> Vec<Texture<'static>> {
+	try_parse_animation(reader).expect("failed to parse animation")
+}
+
 pub fn try_parse_animation(reader: &mut Reader) -> Option<Vec<Texture<'static>>> {
 	let mut data = reader.clone();
 	let filesize = data.try_u32()? as usize;

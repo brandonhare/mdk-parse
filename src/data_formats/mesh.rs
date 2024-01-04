@@ -1,13 +1,11 @@
 use crate::{gltf, OutputWriter, Reader, Vec2, Vec3};
 
-#[derive(Debug)]
 pub struct Mesh<'a> {
 	pub materials: Vec<&'a str>,
 	pub mesh_data: MeshType<'a>,
 	pub reference_points: Vec<Vec3>,
 }
 
-#[derive(Debug)]
 pub enum MeshType<'a> {
 	Single(MeshGeo),
 	Multimesh {
@@ -66,24 +64,13 @@ impl MeshGeo {
 		target
 	}
 }
-impl std::fmt::Debug for MeshGeo {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		f.debug_struct("MeshGeo")
-			.field("num_verts", &self.verts.len())
-			.field("num_tris", &self.tris.len())
-			.field("bbox", &self.bbox)
-			.finish()
-	}
-}
 
-#[derive(Debug)]
 pub struct Submesh<'a> {
 	pub mesh_data: MeshGeo,
 	pub name: &'a str,
 	pub origin: Vec3,
 }
 
-#[derive(Clone)]
 pub struct MeshTri {
 	pub indices: [u16; 3],
 	pub material_index: i16,
@@ -219,146 +206,3 @@ impl<'a> Mesh<'a> {
 		target
 	}
 }
-
-// todo remove
-/*
-fn add_mesh_to_gltf(
-	gltf: &mut gltf::Gltf, name: String, mesh: &Mesh, target: Option<gltf::NodeIndex>,
-) -> gltf::NodeIndex {
-	// todo textures
-
-	#[derive(Default, Debug)]
-	struct SplitMesh {
-		texture_id: i16,
-		material: Option<gltf::MaterialIndex>,
-		indices: Vec<u16>,
-		verts: Vec<Vec3>,
-		uvs: Vec<[f32; 2]>,
-		vert_map: HashMap<(u16, [isize; 2]), u16>,
-	}
-
-	fn round_uvs(uvs: [f32; 2]) -> [isize; 2] {
-		uvs.map(|f| (f * 1024.0) as isize)
-	}
-
-	let mut primitives = vec![Default::default()];
-	/*
-	let mut primitives: Vec<SplitMesh> = if textures.is_empty() {
-		vec![Default::default()]
-	} else {
-		mesh.textures
-			.iter()
-			.enumerate()
-			.map(|(i, tex)| {
-				let mut result = SplitMesh::default();
-				if let Some(r) = textures.iter().find(|t| &t.name == tex) {
-					result.image = Some(r.clone());
-					result.texture_id = i as _;
-					result.material = Some(gltf.create_texture_material_ref(
-						tex.to_string(),
-						to_string(r.relative_path.as_os_str()),
-					));
-				} else {
-					result.texture_id = -tex[4..].parse::<i16>().expect("expected a pen number");
-					result.material =
-						Some(gltf.create_colour_material(tex.to_string(), [0.0, 0.0, 0.0, 1.0]));
-				}
-				result
-			})
-			.collect()
-	};
-	*/
-
-	fn get_split_mesh(meshes: &mut [SplitMesh], index: i16) -> &mut SplitMesh {
-		if meshes.len() == 1 {
-			return &mut meshes[0];
-		}
-
-		meshes
-			.iter_mut()
-			.find(|mesh| mesh.texture_id == index)
-			.expect("mesh not found for index {index}")
-	}
-
-	for tri in &mesh.tris {
-		let split_mesh = get_split_mesh(&mut primitives, tri.material_index);
-
-		let indices = &tri.indices;
-		let uvs = &tri.uvs;
-
-		if tri.flags & 2 != 0 {
-			// start hidden
-			continue;
-		}
-		if indices[0] == indices[1] && indices[0] == indices[2] {
-			// fully degenerate
-			continue;
-		}
-		if tri.outlines() == [false; 3]
-			&& (indices[0] == indices[1] || indices[1] == indices[2] || indices[0] == indices[2])
-		{
-			// partially degenerate
-			continue;
-		} // else might be a line
-
-		for i in (0..3).rev() {
-			let index = indices[i];
-			let mut uv = uvs[i];
-
-			/*
-			if let Some(img) = &split_mesh.image {
-				uv[0] /= img.width as f32;
-				uv[1] /= img.height as f32;
-			}
-			*/
-
-			let new_index = *split_mesh
-				.vert_map
-				.entry((index, round_uvs(uv)))
-				.or_insert_with(|| {
-					let result = split_mesh.verts.len();
-					split_mesh.verts.push(mesh.verts[index as usize]);
-					split_mesh.uvs.push(uv);
-					result as _
-				});
-
-			split_mesh.indices.push(new_index);
-		}
-	}
-
-	primitives.retain(|prim| !prim.indices.is_empty());
-	if primitives.is_empty() && mesh.reference_points.is_empty() {
-		return target.unwrap_or_else(|| gltf.create_node(name.to_owned(), None));
-	}
-
-	let mesh_index = gltf.create_mesh(name.to_owned());
-	for new_mesh in &primitives {
-		gltf.add_mesh_primitive(
-			mesh_index,
-			&new_mesh.verts,
-			&new_mesh.indices,
-			Some(&new_mesh.uvs),
-			new_mesh.material,
-		);
-	}
-
-	let node = match target {
-		Some(node) => {
-			assert!(
-				gltf.get_node_mesh(node).is_none(),
-				"replacing target node mesh!"
-			);
-			gltf.set_node_mesh(node, mesh_index);
-			node
-		}
-		None => gltf.create_node(name.to_owned(), Some(mesh_index)),
-	};
-
-	let reference_points = &mesh.reference_points;
-	if !reference_points.is_empty() {
-		gltf.create_points_nodes("Reference Points".to_owned(), reference_points, Some(node));
-	}
-
-	node
-}
-*/

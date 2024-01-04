@@ -1,15 +1,13 @@
-use crate::{NoDebug, OutputWriter, Reader};
+use crate::{OutputWriter, Reader};
 
-#[derive(Debug)]
 pub struct Wav<'a> {
-	pub file_data: NoDebug<&'a [u8]>,
+	pub file_data: &'a [u8],
 	pub num_channels: u16,
 	pub samples_per_second: u32,
 	pub bits_per_sample: u16,
 	pub duration_secs: f32,
 }
 
-#[derive(Debug)]
 pub struct SoundInfo<'a> {
 	pub wav: Wav<'a>,
 	pub flags: u32, // todo
@@ -65,7 +63,7 @@ impl<'a> Wav<'a> {
 		let file_data = base_reader.slice(file_length + 8);
 
 		Some(Wav {
-			file_data: NoDebug(file_data),
+			file_data,
 			num_channels,
 			samples_per_second,
 			bits_per_sample,
@@ -78,7 +76,7 @@ impl<'a> Wav<'a> {
 	}
 
 	pub fn save_as(&self, name: &str, output: &mut OutputWriter) {
-		output.write(name, "wav", self.file_data.0)
+		output.write(name, "wav", self.file_data)
 	}
 }
 

@@ -1,12 +1,13 @@
-use crate::{NoDebug, OutputWriter, Reader, Vec3};
+use crate::{OutputWriter, Reader, Vec3};
 
-#[derive(Default, Debug)]
+#[derive(Default)]
 pub struct Dti<'a> {
 	pub filename: &'a str,
 
 	pub player_start_pos: Vec3,
 	pub player_start_angle: f32,
-	pub sky: SkyInfo<'a>,
+	pub sky: SkyInfo,
+	pub sky_pixels: &'a [u8],
 	pub translucent_colours: [[u8; 4]; 4],
 
 	pub arenas: Vec<DtiArena<'a>>,
@@ -16,41 +17,32 @@ pub struct Dti<'a> {
 }
 
 #[derive(Default, Debug)]
-pub struct SkyInfo<'a> {
-	ceiling_colour: i32,
-	floor_colour: i32,
-	y: i32,
-	x: i32,
-	src_width: u32,
-	src_height: u32,
-	dest_width: u32,
-	dest_height: u32,
-	reflected_top_colour: i32,
-	reflected_bottom_colour: i32,
-
-	pixels: NoDebug<&'a [u8]>,
-}
-
-#[derive(Debug)]
-struct Teleport {
-	index: i32,
-	pos: Vec3,
-	angle: f32,
+pub struct SkyInfo {
+	pub ceiling_colour: i32,
+	pub floor_colour: i32,
+	pub y: i32,
+	pub x: i32,
+	pub src_width: u32,
+	pub src_height: u32,
+	pub dest_width: u32,
+	pub dest_height: u32,
+	pub reflected_top_colour: i32,
+	pub reflected_bottom_colour: i32,
 }
 
 #[derive(Debug)]
 pub struct DtiArena<'a> {
-	name: &'a str,
-	num: f32, // todo what is this
-	entities: Vec<DtiEntity<'a>>,
-	teleports: Vec<Teleport>, // todo check these
+	pub name: &'a str,
+	pub num: f32, // todo what is this
+	pub entities: Vec<DtiEntity<'a>>,
+	pub teleports: Vec<Teleport>, // todo check these
 }
 
 #[derive(Debug)]
 pub struct DtiEntity<'a> {
-	id: i32,
-	bbox: [Vec3; 2],
-	data: DtiEntityData<'a>,
+	pub id: i32,
+	pub bbox: [Vec3; 2],
+	pub data: DtiEntityData<'a>,
 }
 #[derive(Debug)]
 pub enum DtiEntityData<'a> {
@@ -63,6 +55,12 @@ pub enum DtiEntityData<'a> {
 	Fan,
 	JumpPoint,
 	Slidething,
+}
+#[derive(Debug)]
+pub struct Teleport {
+	pub index: i32,
+	pub pos: Vec3,
+	pub angle: f32,
 }
 
 impl<'a> Dti<'a> {
@@ -143,6 +141,9 @@ impl<'a> Dti<'a> {
 						4 => DtiEntityData::Hotpick(arena_data.str(12)),
 						kind => {
 							pos_max = arena_data.vec3();
+							if pos_max == Default::default() {
+								pos_max = pos_min;
+							}
 							match kind {
 								1 => DtiEntityData::ArenaShowZone,
 								3 => DtiEntityData::ArenaActivateZone,
@@ -161,6 +162,11 @@ impl<'a> Dti<'a> {
 							}
 						}
 					};
+
+					assert!(
+						pos_min.x <= pos_max.x && pos_min.y <= pos_max.y && pos_min.z <= pos_max.z,
+						"invalid bbox for entity {id} ({data:?}): [{pos_min}, {pos_max}]"
+					);
 
 					entities.push(DtiEntity {
 						id,
@@ -224,7 +230,7 @@ impl<'a> Dti<'a> {
 			sky.dest_height = dest_height;
 			sky.src_width = src_width;
 
-			sky.pixels = data.slice((src_width * sky.src_height) as usize).into();
+			result.sky_pixels = data.slice(src_width as usize * sky.src_height as usize);
 		}
 
 		let filename_footer = data.str(12);
@@ -235,19 +241,18 @@ impl<'a> Dti<'a> {
 	}
 
 	pub fn save(&self, output: &mut OutputWriter) {
-		//output.write("debug", "txt", format!("{self:#?}").as_bytes());
 		output.write_palette("palette", self.pal);
 		output.write_png(
 			"skybox",
 			self.sky.src_width,
 			self.sky.src_height,
-			self.sky.pixels.0,
+			self.sky_pixels,
 			Some(self.pal),
 		);
 
 		use std::fmt::Write;
 		let mut info = format!(
-			"name: {}\n\nplayer start pos: {:?}, angle: {}\ntranslucent colours: {:?}\npalette free rows: {}\n\n{:#?}\n\narenas ({}):\n",
+			"name: {}\n\nplayer start pos: {}, angle: {}\ntranslucent colours: {:?}\npalette free rows: {}\n\n{:#?}\n\narenas ({}):\n",
 			self.filename, self.player_start_pos, self.player_start_angle, self.translucent_colours, self.num_pal_free_pixels / 16, self.sky, self.arenas.len()
 		);
 
@@ -269,15 +274,15 @@ impl<'a> Dti<'a> {
 				if entity.bbox[0] == entity.bbox[1] {
 					writeln!(
 						info,
-						"\t\t\t[{entity_index:3}] id: {:4}, kind: {:?}, position: {:?}",
+						"\t\t\t[{entity_index:3}] id: {:4}, kind: {:?}, position: {}",
 						entity.id, entity.data, entity.bbox[0]
 					)
 					.unwrap();
 				} else {
 					writeln!(
 						info,
-						"\t\t\t[{entity_index:3}] id: {:4}, kind: {:?}, bbox: {:?}",
-						entity.id, entity.data, entity.bbox
+						"\t\t\t[{entity_index:3}] id: {:4}, kind: {:?}, bbox: [{}, {}]",
+						entity.id, entity.data, entity.bbox[0], entity.bbox[1]
 					)
 					.unwrap();
 				}

@@ -1,4 +1,4 @@
-use crate::data_formats::{image_formats, try_parse_animation, Animation, Mesh, Texture, Wav};
+use crate::data_formats::{image_formats, Animation, Mesh, Texture, Wav};
 use crate::{OutputWriter, Reader};
 
 pub struct Bni<'a> {
@@ -82,7 +82,7 @@ impl<'a> Bni<'a> {
 			}
 
 			// 2d animation
-			if let Some(anim) = try_parse_animation(&mut reader.clone()) {
+			if let Some(anim) = image_formats::try_parse_animation(&mut reader.clone()) {
 				animations_2d.push((name, anim));
 				continue;
 			}

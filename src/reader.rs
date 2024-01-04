@@ -16,22 +16,6 @@ pub struct Reader<'buf> {
 	reader: io::Cursor<&'buf [u8]>,
 }
 
-pub trait Readable {
-	type Buffer: std::fmt::Debug;
-	fn new_buffer() -> Self::Buffer;
-	fn buffer_as_mut(buf: &mut Self::Buffer) -> &mut [u8] {
-		let ptr: *mut Self::Buffer = buf;
-		unsafe {
-			std::slice::from_raw_parts_mut(ptr as *mut u8, std::mem::size_of::<Self::Buffer>())
-		}
-	}
-
-	fn convert_big(buf: Self::Buffer) -> Self;
-	fn convert_little(buf: Self::Buffer) -> Self;
-	#[must_use]
-	fn validate(&self) -> bool;
-}
-
 #[allow(dead_code)]
 impl<'buf> Reader<'buf> {
 	pub fn new(buf: &'buf [u8]) -> Reader<'buf> {
@@ -379,6 +363,79 @@ impl<'buf> Reader<'buf> {
 	}
 }
 
+pub trait Readable {
+	type Buffer: std::fmt::Debug;
+	fn new_buffer() -> Self::Buffer;
+	fn buffer_as_mut(buf: &mut Self::Buffer) -> &mut [u8] {
+		let ptr: *mut Self::Buffer = buf;
+		unsafe {
+			std::slice::from_raw_parts_mut(ptr as *mut u8, std::mem::size_of::<Self::Buffer>())
+		}
+	}
+
+	fn convert_big(buf: Self::Buffer) -> Self;
+	fn convert_little(buf: Self::Buffer) -> Self;
+	#[must_use]
+	fn validate(&self) -> bool;
+}
+
+fn validate_int<T>(_: T) -> bool {
+	true
+}
+fn validate_float32(f: f32) -> bool {
+	f.is_finite() && (-10000000.0..=10000000.0).contains(&f)
+}
+fn validate_float64(f: f64) -> bool {
+	f.is_finite() && (-10000000.0..=10000000.0).contains(&f)
+}
+
+macro_rules! make_readable {
+	($name:ty, $size:expr, $validate_func:tt) => {
+		impl Readable for $name {
+			type Buffer = [u8; $size];
+			fn new_buffer() -> Self::Buffer {
+				[0; $size]
+			}
+			fn convert_big(bytes: Self::Buffer) -> Self {
+				<$name>::from_be_bytes(bytes)
+			}
+			fn convert_little(bytes: Self::Buffer) -> Self {
+				<$name>::from_le_bytes(bytes)
+			}
+			fn validate(&self) -> bool {
+				($validate_func)(*self)
+			}
+		}
+	};
+}
+make_readable!(i8, 1, validate_int);
+make_readable!(u8, 1, validate_int);
+make_readable!(i16, 2, validate_int);
+make_readable!(u16, 2, validate_int);
+make_readable!(i32, 4, validate_int);
+make_readable!(u32, 4, validate_int);
+make_readable!(i64, 8, validate_int);
+make_readable!(u64, 8, validate_int);
+make_readable!(f32, 4, validate_float32);
+make_readable!(f64, 8, validate_float64);
+
+impl Readable for Vec3 {
+	type Buffer = <[f32; 3] as Readable>::Buffer;
+	fn new_buffer() -> Self::Buffer {
+		<[f32; 3] as Readable>::new_buffer()
+	}
+	fn convert_big(buf: Self::Buffer) -> Self {
+		<[f32; 3] as Readable>::convert_big(buf).into()
+	}
+	fn convert_little(buf: Self::Buffer) -> Self {
+		<[f32; 3] as Readable>::convert_little(buf).into()
+	}
+	fn validate(&self) -> bool {
+		let base: &[f32; 3] = self;
+		base.validate()
+	}
+}
+
 impl<T: Readable, const N: usize> Readable for [T; N] {
 	type Buffer = [T::Buffer; N];
 
@@ -397,69 +454,5 @@ impl<T: Readable, const N: usize> Readable for [T; N] {
 	}
 	fn validate(&self) -> bool {
 		self.iter().all(T::validate)
-	}
-}
-
-macro_rules! make_readable {
-	($name:ident, $size:expr, $validate_func:tt) => {
-		impl Readable for $name {
-			type Buffer = [u8; $size];
-			fn new_buffer() -> Self::Buffer {
-				Default::default()
-			}
-			fn convert_big(bytes: Self::Buffer) -> Self {
-				$name::from_be_bytes(bytes)
-			}
-			fn convert_little(bytes: Self::Buffer) -> Self {
-				$name::from_le_bytes(bytes)
-			}
-
-			fn validate(&self) -> bool {
-				($validate_func)(*self)
-			}
-		}
-	};
-}
-
-fn validate_int<T>(_: T) -> bool {
-	true
-}
-fn validate_float32(f: f32) -> bool {
-	f.is_finite() && (-10000000.0..=10000000.0).contains(&f)
-}
-fn validate_float64(f: f64) -> bool {
-	f.is_finite() && (-10000000.0..=10000000.0).contains(&f)
-}
-
-macro_rules! allNums {
-	($func:ident) => {
-		$func!(i8, 1, validate_int);
-		$func!(u8, 1, validate_int);
-		$func!(i16, 2, validate_int);
-		$func!(u16, 2, validate_int);
-		$func!(i32, 4, validate_int);
-		$func!(u32, 4, validate_int);
-		$func!(i64, 8, validate_int);
-		$func!(u64, 8, validate_int);
-		$func!(f32, 4, validate_float32);
-		$func!(f64, 8, validate_float64);
-	};
-}
-allNums!(make_readable);
-
-impl Readable for Vec3 {
-	type Buffer = <[f32; 3] as Readable>::Buffer;
-	fn new_buffer() -> Self::Buffer {
-		Default::default()
-	}
-	fn convert_big(buf: Self::Buffer) -> Self {
-		<[f32; 3] as Readable>::convert_big(buf).into()
-	}
-	fn convert_little(buf: Self::Buffer) -> Self {
-		<[f32; 3] as Readable>::convert_little(buf).into()
-	}
-	fn validate(&self) -> bool {
-		let base: [f32; 3] = self.into();
-		base.validate()
 	}
 }

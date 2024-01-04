@@ -1,7 +1,5 @@
 #![allow(dead_code)]
 #![warn(trivial_casts, trivial_numeric_casts, future_incompatible)]
-use std::ffi::OsStr;
-use std::fs::{self, DirEntry};
 use std::path::Path;
 
 mod data_formats;
@@ -85,48 +83,9 @@ fn read_file(path: &Path) -> DataFile {
 	DataFile(path, data)
 }
 
-#[derive(Default)]
-#[repr(transparent)]
-pub struct NoDebug<T>(T);
-impl<T> From<T> for NoDebug<T> {
-	fn from(value: T) -> Self {
-		Self(value)
-	}
-}
-impl<T> std::fmt::Debug for NoDebug<T> {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		f.write_str("...")
-	}
-}
-impl<T> std::ops::Deref for NoDebug<T> {
-	type Target = T;
-	fn deref(&self) -> &Self::Target {
-		&self.0
-	}
-}
-impl<T> std::ops::DerefMut for NoDebug<T> {
-	fn deref_mut(&mut self) -> &mut Self::Target {
-		&mut self.0
-	}
-}
-
-fn for_all_ext(path: impl AsRef<Path>, ext: &str, func: fn(&Path)) {
-	let mut entries: Vec<_> = fs::read_dir(path).unwrap().flatten().collect();
-	entries.sort_by(|a, b| {
-		fn is_stream(dir: &DirEntry) -> bool {
-			let path = dir.path();
-			let stem = path.file_stem();
-			!stem
-				.unwrap_or_default()
-				.to_str()
-				.unwrap_or_default()
-				.contains("STREAM")
-		}
-		is_stream(a)
-			.cmp(&is_stream(b))
-			.then(a.path().cmp(&b.path()))
-	});
-	for entry in entries {
+fn for_all_ext(path: impl AsRef<Path>, ext: &str, func: impl Fn(&Path) + Copy) {
+	for entry in std::fs::read_dir(path).unwrap() {
+		let entry = entry.unwrap();
 		let path = entry.path();
 		if entry.file_type().unwrap().is_dir() {
 			for_all_ext(path, ext, func);
@@ -185,7 +144,7 @@ fn parse_lbb(path: &Path) {
 	let file = read_file(path);
 	let (pal, image) = image_formats::try_parse_palette_image(&mut Reader::new(&file)).unwrap();
 	let mut output = OutputWriter::new(path.parent().unwrap(), false);
-	let name = path.file_name().and_then(OsStr::to_str).unwrap();
+	let name = path.file_name().and_then(|s| s.to_str()).unwrap();
 	image.save_as(name, &mut output, Some(pal));
 }
 
@@ -238,8 +197,8 @@ fn main() {
 
 	for_all_ext("assets", "fti", parse_fti);
 	for_all_ext("assets", "lbb", parse_lbb);
-	//for_all_ext("assets", "flc", parse_video);
-	//for_all_ext("assets", "mve", parse_video);
+	for_all_ext("assets", "flc", parse_video);
+	for_all_ext("assets", "mve", parse_video);
 
 	println!("done in {:.2?}", start_time.elapsed());
 }

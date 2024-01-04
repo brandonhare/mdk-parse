@@ -8,7 +8,7 @@ mod texture;
 mod wav;
 pub use animation::Animation;
 pub use bsp::Bsp;
-pub use image_formats::try_parse_animation;
+pub use image_formats::parse_animation;
 pub use mesh::Mesh;
 pub use spline::Spline;
 pub use texture::Texture;

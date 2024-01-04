@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use crate::data_formats::{try_parse_animation, Texture, Wav};
+use crate::data_formats::{parse_animation, Texture, Wav};
 use crate::{OutputWriter, Reader};
 
 pub struct FontLetter<Pixels: AsRef<[u8]>> {
@@ -45,7 +45,7 @@ impl<'a> Fti<'a> {
 
 			match name {
 				"ARROW" => {
-					let frames = try_parse_animation(&mut reader).unwrap();
+					let frames = parse_animation(&mut reader);
 					assert!(frames.len() == 1);
 					arrow = Some(frames.into_iter().next().unwrap());
 				}

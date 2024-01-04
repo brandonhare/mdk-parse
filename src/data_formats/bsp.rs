@@ -1,7 +1,6 @@
 use crate::data_formats::mesh::{MeshGeo, MeshTri};
 use crate::{gltf, OutputWriter, Reader, Vec3};
 
-#[derive(Debug)]
 pub struct BspPlane {
 	pub normal: Vec3,
 	pub dist: f32,
@@ -13,7 +12,6 @@ pub struct BspPlane {
 	pub tris_back_index: u16,
 }
 
-#[derive(Debug)]
 pub struct Bsp<'a> {
 	pub planes: Vec<BspPlane>,
 	pub materials: Vec<&'a str>,

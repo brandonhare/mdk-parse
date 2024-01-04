@@ -1,14 +1,12 @@
 use crate::data_formats::Texture;
 use crate::{OutputWriter, Reader};
 
-#[derive(Debug)]
 pub enum Material<'a> {
 	Pen(i32), // todo split
 	Texture(Texture<'a>, MaterialFlags),
 	AnimatedTexture(Vec<Texture<'a>>, MaterialFlags),
 }
 
-#[derive(Debug)]
 pub struct MaterialFlags {
 	// todo what are these
 	pub a: f32,
@@ -16,7 +14,6 @@ pub struct MaterialFlags {
 	pub flags: u32,
 }
 
-#[derive(Debug)]
 pub struct Mti<'a> {
 	pub filename: &'a str,
 	pub materials: Vec<(&'a str, Material<'a>)>,

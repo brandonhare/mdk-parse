@@ -105,8 +105,7 @@ impl<'a> Mto<'a> {
 			let bsp = Bsp::parse(&mut arena_reader);
 
 			// output matfile
-			arena_reader.set_position(matfile_offset);
-			let mti = Mti::parse(&mut arena_reader);
+			let mti = Mti::parse(arena_reader.resized(matfile_offset..));
 
 			arenas.push(MtoArena {
 				name: arena_name,

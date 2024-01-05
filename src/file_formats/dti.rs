@@ -1,12 +1,11 @@
 use crate::{OutputWriter, Reader, Vec3};
 
-#[derive(Default)]
 pub struct Dti<'a> {
 	pub filename: &'a str,
 
 	pub player_start_pos: Vec3,
 	pub player_start_angle: f32,
-	pub sky: SkyInfo,
+	pub sky_info: SkyInfo,
 	pub sky_pixels: &'a [u8],
 	pub translucent_colours: [[u8; 4]; 4],
 
@@ -69,9 +68,7 @@ impl<'a> Dti<'a> {
 		let filesize = data.u32() + 4;
 		data.resize(4..);
 
-		let mut result = Dti::default();
-
-		result.filename = data.str(12);
+		let filename = data.str(12);
 		let filesize2 = data.u32();
 		assert_eq!(filesize, filesize2 + 12);
 
@@ -82,36 +79,62 @@ impl<'a> Dti<'a> {
 		let skybox_offset = data.u32() as usize;
 
 		// player and skybox info
+		let player_start_pos;
+		let player_start_angle;
+		let sky_info: SkyInfo;
+		let translucent_colours;
 		{
 			data.set_position(player_and_sky_offset);
 			let arena_index = data.u32();
 			assert_eq!(arena_index, 0);
 
-			result.player_start_pos = data.vec3();
-			result.player_start_angle = data.f32();
+			player_start_pos = data.vec3();
+			player_start_angle = data.f32();
 
-			result.sky.ceiling_colour = data.i32();
-			result.sky.floor_colour = data.i32();
-			result.sky.y = data.i32();
-			result.sky.x = data.i32();
-			result.sky.dest_width = data.u32() + 4;
-			result.sky.src_height = data.u32();
-			result.sky.reflected_top_colour = data.i32();
-			result.sky.reflected_bottom_colour = data.i32();
+			let ceiling_colour = data.i32();
+			let floor_colour = data.i32();
+			let y = data.i32();
+			let x = data.i32();
+			let dest_width = data.u32() + 4;
+			let src_height = data.u32();
+			let reflected_top_colour = data.i32();
+			let reflected_bottom_colour = data.i32();
+
+			let has_reflection = reflected_top_colour >= 0;
+			let (dest_height, src_width) = if has_reflection {
+				assert!(src_height & 1 == 0);
+				(src_height / 2, dest_width * 2)
+			} else {
+				(src_height, dest_width)
+			};
+
+			sky_info = SkyInfo {
+				ceiling_colour,
+				floor_colour,
+				y,
+				x,
+				dest_width,
+				src_height,
+				reflected_top_colour,
+				reflected_bottom_colour,
+				src_width,
+				dest_height,
+			};
 
 			let colours = data.get::<[[i32; 4]; 4]>();
-			result.translucent_colours = colours.map(|c| c.map(|n| n as u8));
+			translucent_colours = colours.map(|c| c.map(|n| n as u8));
 
 			assert_eq!(data.position(), teleports_offset);
 		}
 
 		// arenas/entities
+		let mut arenas;
 		{
 			data.set_position(entities_offset);
 
 			let num_arenas = data.u32();
 
-			let mut arenas = Vec::with_capacity(num_arenas as usize);
+			arenas = Vec::with_capacity(num_arenas as usize);
 			for _arena_index in 0..num_arenas {
 				let arena_name = data.str(8);
 				let arena_offset = data.u32();
@@ -182,20 +205,19 @@ impl<'a> Dti<'a> {
 					teleports: Vec::new(),
 				});
 			}
-			result.arenas = arenas;
 		}
 
 		// teleport locations
 		{
 			data.set_position(teleports_offset);
-			let count = data.u32();
-			for i in 0..count {
+			let num_teleports = data.u32();
+			for i in 0..num_teleports {
 				let index = data.i32();
 				let arena_index = data.i32();
 				let pos = data.vec3();
 				let angle = data.f32();
 				assert_eq!(index, (i as i32 + 1) % 10);
-				result.arenas[arena_index as usize]
+				arenas[arena_index as usize]
 					.teleports
 					.push(Teleport { index, pos, angle });
 			}
@@ -203,49 +225,47 @@ impl<'a> Dti<'a> {
 		}
 
 		// pal
+		let pal;
+		let num_pal_free_pixels;
 		{
 			data.set_position(pal_offset);
-			result.num_pal_free_pixels = data.u32();
-			result.pal = data.slice(0x300);
+			num_pal_free_pixels = data.u32();
+			pal = data.slice(0x300);
 
-			assert_eq!(result.num_pal_free_pixels % 16, 0);
+			assert_eq!(num_pal_free_pixels % 16, 0);
 			assert_eq!(data.position(), skybox_offset);
 		}
 
 		// skybox
+		let sky_pixels;
 		{
 			data.set_position(skybox_offset);
-
-			let sky = &mut result.sky;
-
-			let has_reflection = sky.reflected_top_colour >= 0;
-
-			let (dest_height, src_width) = if has_reflection {
-				assert!(sky.src_height & 1 == 0);
-				(sky.src_height / 2, sky.dest_width * 2)
-			} else {
-				(sky.src_height, sky.dest_width)
-			};
-
-			sky.dest_height = dest_height;
-			sky.src_width = src_width;
-
-			result.sky_pixels = data.slice(src_width as usize * sky.src_height as usize);
+			sky_pixels = data.slice(sky_info.src_width as usize * sky_info.src_height as usize);
 		}
 
 		let filename_footer = data.str(12);
-		assert_eq!(result.filename, filename_footer);
+		assert_eq!(filename, filename_footer);
 		assert!(data.is_empty());
 
-		result
+		Dti {
+			filename,
+			player_start_pos,
+			player_start_angle,
+			sky_info,
+			sky_pixels,
+			translucent_colours,
+			arenas,
+			num_pal_free_pixels,
+			pal,
+		}
 	}
 
 	pub fn save(&self, output: &mut OutputWriter) {
 		output.write_palette("palette", self.pal);
 		output.write_png(
 			"skybox",
-			self.sky.src_width,
-			self.sky.src_height,
+			self.sky_info.src_width,
+			self.sky_info.src_height,
 			self.sky_pixels,
 			Some(self.pal),
 		);
@@ -253,7 +273,7 @@ impl<'a> Dti<'a> {
 		use std::fmt::Write;
 		let mut info = format!(
 			"name: {}\n\nplayer start pos: {}, angle: {}\ntranslucent colours: {:?}\npalette free rows: {}\n\n{:#?}\n\narenas ({}):\n",
-			self.filename, self.player_start_pos, self.player_start_angle, self.translucent_colours, self.num_pal_free_pixels / 16, self.sky, self.arenas.len()
+			self.filename, self.player_start_pos, self.player_start_angle, self.translucent_colours, self.num_pal_free_pixels / 16, self.sky_info, self.arenas.len()
 		);
 
 		for (arena_index, arena) in self.arenas.iter().enumerate() {

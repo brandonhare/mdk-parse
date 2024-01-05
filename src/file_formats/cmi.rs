@@ -18,7 +18,7 @@ pub struct CmiArena<'a> {
 }
 
 impl<'a> Cmi<'a> {
-	pub fn parse(reader: &mut Reader<'a>) -> Self {
+	pub fn parse(mut reader: Reader<'a>) -> Self {
 		let filesize = reader.u32() as usize;
 		assert_eq!(reader.len(), filesize + 4, "filesize does not match");
 		reader.rebase();

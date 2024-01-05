@@ -20,7 +20,7 @@ pub struct Mti<'a> {
 }
 
 impl<'a> Mti<'a> {
-	pub fn parse(reader: &mut Reader<'a>) -> Mti<'a> {
+	pub fn parse(mut reader: Reader<'a>) -> Mti<'a> {
 		let filesize = reader.u32() as usize;
 		let mut reader = {
 			let mut new_reader = reader.rebased();

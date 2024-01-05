@@ -124,13 +124,13 @@ fn parse_sni(path: &Path) {
 
 fn parse_mti(path: &Path) {
 	let file = read_file(path);
-	let mti = Mti::parse(&mut Reader::new(&file));
+	let mti = Mti::parse(Reader::new(&file));
 	mti.save(&mut OutputWriter::new(path, true), None);
 }
 
 fn parse_cmi(path: &Path) {
 	let file = read_file(path);
-	let cmi = Cmi::parse(&mut Reader::new(&file));
+	let cmi = Cmi::parse(Reader::new(&file));
 	cmi.save(&mut OutputWriter::new(path, true));
 }
 

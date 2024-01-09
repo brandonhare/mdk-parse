@@ -5,4 +5,3 @@ mesh reference points purpose
 textures a, b, flags?
 sni sound type values
 fix palettes
-flatten cmi output

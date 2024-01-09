@@ -1974,13 +1974,13 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 	}
 
 	result.summary = summary;
-	result.anim_names.sort();
+	result.anim_names.sort_unstable();
 	result.anim_names.dedup();
-	result.anim_offsets.sort();
+	result.anim_offsets.sort_unstable();
 	result.anim_offsets.dedup();
-	result.path_offsets.sort();
+	result.path_offsets.sort_unstable();
 	result.path_offsets.dedup();
-	result.called_scripts.sort();
+	result.called_scripts.sort_unstable();
 	result.called_scripts.dedup();
 
 	result

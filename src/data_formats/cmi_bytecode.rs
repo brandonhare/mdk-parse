@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fmt::Write;
 
 use crate::{Reader, Vec3};
@@ -75,6 +76,28 @@ fn read_block(blocks: &mut Vec<u32>, reader: &mut Reader) -> BlockInfo {
 	push_block(blocks, reader.u32())
 }
 
+fn push_ext_block<'a>(
+	offsets: &mut CmiScript<'a>, target_name: &'a str, target_offset: u32, reason: &'static str,
+) -> BlockInfo {
+	offsets.called_scripts.push(CmiCalledScript {
+		target_name,
+		target_offset,
+		reason,
+	});
+	BlockInfo {
+		offset: target_offset,
+		index: usize::MAX,
+	}
+}
+
+fn read_ext_block<'a>(
+	reader: &mut Reader<'a>, offsets: &mut CmiScript<'a>, target_name: &'a str,
+	reason: &'static str,
+) -> BlockInfo {
+	let target = reader.u32();
+	push_ext_block(offsets, target_name, target, reason)
+}
+
 #[derive(Default)]
 struct BlockInfo {
 	index: usize,
@@ -84,8 +107,10 @@ impl std::fmt::Display for BlockInfo {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		if self.offset == 0 {
 			f.write_str("(None)")
+		} else if self.index != usize::MAX {
+			write!(f, "block_{} ({:06X})", self.index, self.offset)
 		} else {
-			write!(f, "block_{} ({:X})", self.index, self.offset)
+			write!(f, "external ({:06X})", self.offset)
 		}
 	}
 }
@@ -278,19 +303,47 @@ fn get_anim_name<'a>(reader: &Reader<'a>, anim_offset: u32) -> Option<&'a str> {
 }
 
 #[derive(Default)]
-pub struct CmiOffsets {
+pub struct CmiScript<'a> {
+	pub summary: String,
+
+	pub anim_names: Vec<&'a str>,
 	pub anim_offsets: Vec<u32>,
 	pub path_offsets: Vec<u32>,
+
+	pub called_scripts: Vec<CmiCalledScript<'a>>,
+	pub call_origins: Vec<CmiCallOrigin<'a>>, // used by caller cmi
 }
 
-pub fn parse_cmi(
-	filename: &str, name: &str, reader: &mut Reader, offsets: &mut CmiOffsets,
-) -> String {
-	let mut summary = format!("{filename}/{name}\n\n");
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+pub struct CmiCalledScript<'a> {
+	pub target_offset: u32,
+	pub target_name: &'a str,
+	pub reason: &'static str,
+}
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+pub struct CmiCallOrigin<'a> {
+	pub arena_name: &'a str,
+	pub source_name: &'a str,
+	pub target_name: &'a str,
+	pub reason: Cow<'a, str>,
+	pub source_offset: u32,
+}
+
+impl<'a> CmiScript<'a> {
+	pub fn parse(mut reader: Reader<'a>) -> Self {
+		parse_cmi(&mut reader)
+	}
+}
+
+fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
+	let mut result = CmiScript::default();
 
 	if reader.position() == 0 {
-		return summary;
+		return result;
 	}
+
+	let mut summary = String::new();
+	let offsets = &mut result;
 
 	macro_rules! w {
 		()=>{};
@@ -312,9 +365,9 @@ pub fn parse_cmi(
 		let block_offset = blocks[block_index];
 
 		if block_index == 0 {
-			wl!("main (offset {block_offset:X})");
+			wl!("main (offset {block_offset:06X})");
 		} else {
-			wl!("block_{block_index} (offset {block_offset:X})");
+			wl!("block_{block_index} (offset {block_offset:06X})");
 		}
 
 		reader.set_position(block_offset as usize);
@@ -328,7 +381,7 @@ pub fn parse_cmi(
 
 			match cmd {
 				0x0 | 0x7 | 0x1E | 0xFE | 0xFF => {
-					eprintln!("invalid opcode in {filename}/{name} ({cmd_offset:06X})!");
+					eprintln!("invalid opcode {cmd:02X} at {cmd_offset:06X}!");
 					wl!("Invalid!]");
 					break;
 				}
@@ -345,7 +398,7 @@ pub fn parse_cmi(
 						0 => Some(reader.vec3()),
 						1 => None,
 						n => {
-							eprint!("cmi opcode 0x02 unknown vec param {n} in {filename}/{name} ({cmd_offset:06X})");
+							eprint!("cmi opcode 0x02 unknown vec param {n} at {cmd_offset:06X}");
 							None
 						}
 					};
@@ -355,6 +408,7 @@ pub fn parse_cmi(
 				0x03 => {
 					let anim_offset = reader.u32();
 					if let Some(anim_name) = get_anim_name(reader, anim_offset) {
+						offsets.anim_names.push(anim_name);
 						wl!("Set animation] name: {anim_name}");
 					} else {
 						offsets.anim_offsets.push(anim_offset);
@@ -364,12 +418,13 @@ pub fn parse_cmi(
 				0x04 => {
 					let order_code = reader.u8();
 					w!("Give order] ");
+					let mut target_script = None;
 					if order_code == 7 {
-						let branch = branch_code(&mut blocks, reader);
-						w!("{branch}");
-						if branch.target2.offset != 0 {
-							w!(" (target 2: {})", branch.target2);
-						}
+						let code = reader.u8();
+						assert!(code == 0xFC || code == 0xC);
+						let target = reader.u32();
+						target_script = Some(target);
+						w!("Run script ({target:06X})");
 					} else if order_code == 0x2b {
 						let dir = reader.vec2();
 						w!("Set home (dir: {dir:?})");
@@ -415,6 +470,12 @@ pub fn parse_cmi(
 
 					if let Some(name) = name {
 						w!(", Name: {name}");
+
+						if let Some(target_script) = target_script {
+							push_ext_block(offsets, name, target_script, "Order");
+						}
+					} else if let Some(target_script) = target_script {
+						push_ext_block(offsets, "Unknown", target_script, "Order");
 					}
 
 					wl!();
@@ -531,7 +592,7 @@ pub fn parse_cmi(
 				0x1D => {
 					let value1 = reader.u8();
 					let name = reader.pascal_str();
-					let target = read_block(&mut blocks, reader);
+					let target = read_ext_block(reader, offsets, name, "Create Chain");
 					wl!("CreateChain] value1: {value1}, name: {name}, target: {target}");
 				}
 				0x1F => {
@@ -668,6 +729,7 @@ pub fn parse_cmi(
 				0x3B => {
 					let anim_offset = reader.u32();
 					if let Some(anim_name) = get_anim_name(reader, anim_offset) {
+						offsets.anim_names.push(anim_name);
 						wl!("Set anim] name: {anim_name}");
 					} else {
 						offsets.anim_offsets.push(anim_offset);
@@ -687,7 +749,7 @@ pub fn parse_cmi(
 						name1 = reader.pascal_str();
 					}
 					let name2 = reader.pascal_str();
-					let target = read_block(&mut blocks, reader);
+					let target = read_ext_block(reader, offsets, name2, "Spawn (3D)");
 					if has_name == 0 {
 						wl!("Spawn badguy] point index: {point_index}, name: {name2}, target: {target}");
 					} else {
@@ -808,7 +870,7 @@ pub fn parse_cmi(
 				0x56 => {
 					let pos = reader.vec3();
 					let name = reader.pascal_str();
-					let target = read_block(&mut blocks, reader);
+					let target = read_ext_block(reader, offsets, name, "Spawn (56)");
 					wl!("Spawn entity 3] name: {name}, pos: {pos:?}, init: {target}");
 				}
 				0x57 => {
@@ -948,7 +1010,7 @@ pub fn parse_cmi(
 				}
 				0x6A => {
 					let value = reader.f32();
-					wl!("Set entitry arena2OrFloatValue] value: {value}");
+					wl!("Set entity arena2OrFloatValue] value: {value}");
 				}
 				0x6B => {
 					let name = reader.pascal_str();
@@ -982,7 +1044,7 @@ pub fn parse_cmi(
 				0x71 => {
 					let pos = reader.vec3();
 					let name = reader.pascal_str();
-					let init_target = read_block(&mut blocks, reader);
+					let init_target = read_ext_block(reader, offsets, name, "Spawn (71)");
 					wl!("Spawn alien] pos: {pos:?}, name: {name}, init target: {init_target}");
 				}
 				0x72 => {
@@ -1200,7 +1262,7 @@ pub fn parse_cmi(
 					let id = reader.i32();
 					let object_name = reader.pascal_str();
 					let arena_name = reader.pascal_str();
-					let init_target = read_block(&mut blocks, reader);
+					let init_target = read_ext_block(reader, offsets, object_name, "Spawn Door");
 					wl!("Spawn Door] pos: {position:?}, angle: {angle}, id: {id}, name: {object_name}, arena: {arena_name}, init target: {init_target}");
 				}
 				0x96 => {
@@ -1209,12 +1271,14 @@ pub fn parse_cmi(
 
 					w!("Set door anims] open: ");
 					if let Some(open_name) = get_anim_name(reader, open_anim_offset) {
+						offsets.anim_names.push(open_name);
 						w!("{open_name}, close: ");
 					} else {
 						offsets.anim_offsets.push(open_anim_offset);
 						w!("{open_anim_offset:06X}, close: ");
 					}
 					if let Some(close_name) = get_anim_name(reader, close_anim_offset) {
+						offsets.anim_names.push(close_name);
 						wl!("{close_name}");
 					} else {
 						offsets.anim_offsets.push(close_anim_offset);
@@ -1251,7 +1315,7 @@ pub fn parse_cmi(
 				0x9C => {
 					let index = reader.u8();
 					let name = reader.pascal_str();
-					let init_target = read_block(&mut blocks, reader);
+					let init_target = read_ext_block(reader, offsets, name, "Spawn (9C)");
 					wl!("Spawn alien] name: {name}, position: somePoints[{index}], init target: {init_target}");
 				}
 				0x9D => {
@@ -1289,7 +1353,7 @@ pub fn parse_cmi(
 					};
 					let pos2 = reader.vec3();
 					let name = reader.pascal_str();
-					let init_target = read_block(&mut blocks, reader);
+					let init_target = read_ext_block(reader, offsets, name, "Spawn Blit");
 					wl!("Spawn blit alien] name: {name}, position type: {value1}, pos1: {pos1:?}, pos2: {pos2:?}, init target: {init_target}");
 				}
 				0xA0 => {
@@ -1300,7 +1364,7 @@ pub fn parse_cmi(
 				0xA1 => {
 					let position = reader.vec3();
 					let object_name = reader.pascal_str();
-					let init_target = read_block(&mut blocks, reader);
+					let init_target = read_ext_block(reader, offsets, object_name, "Spawn Powerup");
 					wl!("Spawn Powerup] name: {object_name}, pos: {position:?}, init target: {init_target}");
 				}
 				0xA2 => {
@@ -1411,7 +1475,7 @@ pub fn parse_cmi(
 				}
 				0xB3 => {
 					let name = reader.pascal_str();
-					let init_target = read_block(&mut blocks, reader);
+					let init_target = read_ext_block(reader, offsets, name, "Spawn (B3)");
 					wl!("Spawn alien] name: {name}, init target: {init_target}");
 				}
 				0xB4 => {
@@ -1440,7 +1504,7 @@ pub fn parse_cmi(
 					}
 				}
 				0xB6 => {
-					eprintln!("encountered unfinished opcode 0xB6 in {filename}/{name}/block_{block_index} ({block_offset:X})");
+					eprintln!("encountered unfinished opcode 0xB6 at {block_offset:06X}");
 					let var = simple_var(reader);
 					let value = reader.f32();
 					// target?
@@ -1547,7 +1611,7 @@ pub fn parse_cmi(
 					wl!("Branch on some alien value] value: {value}, {branch}");
 				}
 				0xC4 => {
-					eprintln!("encountered unfinished opcode 0xC4 in {filename}/{name}/block_{block_index} ({block_offset:X})");
+					eprintln!("encountered unfinished opcode 0xC4 at {block_offset:06X}");
 					let num = var_or_data(reader);
 					wl!("Set dtiArenaNum] num: {num}");
 					// todo breaks out of loop here?
@@ -1603,7 +1667,7 @@ pub fn parse_cmi(
 					offsets.path_offsets.push(path_offset);
 					let length = reader.f32();
 					let name = reader.pascal_str();
-					let target = read_block(&mut blocks, reader);
+					let target = read_ext_block(reader, offsets, name, "Spawn on path");
 					wl!("Spawn aliens on path] name: {name}, spacing: {length}, init target: {target}, path offset: {path_offset:06X}");
 				}
 				0xCF => {
@@ -1705,7 +1769,7 @@ pub fn parse_cmi(
 					wl!("Set some stuff] pos: {pos:?}, value1: {value1}, value2: {value2}");
 				}
 				0xE3 => {
-					eprintln!("encountered unfinished opcode 0xB6 in {filename}/{name}/block_{block_index} ({block_offset:X})");
+					eprintln!("encountered unfinished opcode 0xB6 at {block_offset:06X}");
 					wl!("?]");
 					// todo
 					break;
@@ -1724,7 +1788,7 @@ pub fn parse_cmi(
 					let angle = reader.f32();
 					let arena_index = reader.i32();
 					let object_name = reader.pascal_str();
-					let init_target = read_block(&mut blocks, reader);
+					let init_target = read_ext_block(reader, offsets, object_name, "Spawn");
 					wl!("Spawn Entity 2] name: {object_name}, pos: {position:?}, angle: {angle}, arena_index: {arena_index}, init target: {init_target}");
 				}
 				0xE7 => {
@@ -1905,11 +1969,21 @@ pub fn parse_cmi(
 				}
 			}
 		}
-		wl!("(end offset {:X})\n", reader.position());
+		wl!("(end offset {:06X})\n", reader.position());
 		block_index += 1;
 	}
 
-	summary
+	result.summary = summary;
+	result.anim_names.sort();
+	result.anim_names.dedup();
+	result.anim_offsets.sort();
+	result.anim_offsets.dedup();
+	result.path_offsets.sort();
+	result.path_offsets.dedup();
+	result.called_scripts.sort();
+	result.called_scripts.dedup();
+
+	result
 }
 
 #[cfg(test)]

@@ -7,6 +7,7 @@ mod file_formats;
 mod gltf;
 mod output_writer;
 mod reader;
+mod traverse;
 mod vectors;
 use data_formats::image_formats;
 use file_formats::{Bni, Cmi, Dti, Fti, Mti, Mto, Sni};
@@ -184,21 +185,23 @@ fn parse_video(path: &Path) {
 
 fn main() {
 	#[cfg(feature = "readranges")]
-	println!("Read ranges enabled");
+	eprintln!("Read ranges enabled");
 
 	let start_time = std::time::Instant::now();
 
-	for_all_ext("assets", "dti", parse_dti);
-	for_all_ext("assets", "bni", parse_bni);
-	for_all_ext("assets", "mto", parse_mto);
-	for_all_ext("assets", "sni", parse_sni);
-	for_all_ext("assets", "mti", parse_mti);
-	for_all_ext("assets", "cmi", parse_cmi);
+	traverse::parse_traverse();
 
-	for_all_ext("assets", "fti", parse_fti);
-	for_all_ext("assets", "lbb", parse_lbb);
-	for_all_ext("assets", "flc", parse_video);
-	for_all_ext("assets", "mve", parse_video);
+	//for_all_ext("assets", "dti", parse_dti);
+	//for_all_ext("assets", "bni", parse_bni);
+	//for_all_ext("assets", "mto", parse_mto);
+	//for_all_ext("assets", "sni", parse_sni);
+	//for_all_ext("assets", "mti", parse_mti);
+	//for_all_ext("assets", "cmi", parse_cmi);
 
-	println!("done in {:.2?}", start_time.elapsed());
+	//for_all_ext("assets", "fti", parse_fti);
+	//for_all_ext("assets", "lbb", parse_lbb);
+	//for_all_ext("assets", "flc", parse_video);
+	//for_all_ext("assets", "mve", parse_video);
+
+	eprintln!("done in {:.2?}", start_time.elapsed());
 }

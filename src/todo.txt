@@ -1,7 +1,9 @@
 dti skybox reflection index, more params, entity arena num
-level6/olym_9 overlapping palette?
 fall3d.bni/zoom animation palette
 mesh reference points purpose
 textures a, b, flags?
 sni sound type values
-fix palettes
+traverse mesh textures
+traverse 3d animations
+traverse other output? splines? scripts? reports?
+traverse unused meshes/textures?

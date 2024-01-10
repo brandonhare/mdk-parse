@@ -1,4 +1,4 @@
-use crate::{OutputWriter, Reader, Vec3};
+use crate::{data_formats::Texture, OutputWriter, Reader, Vec3};
 
 pub struct Dti<'a> {
 	pub filename: &'a str,
@@ -6,7 +6,7 @@ pub struct Dti<'a> {
 	pub player_start_pos: Vec3,
 	pub player_start_angle: f32,
 	pub sky_info: SkyInfo,
-	pub sky_pixels: &'a [u8],
+	pub skybox: Texture<'a>,
 	pub translucent_colours: [[u8; 4]; 4],
 
 	pub arenas: Vec<DtiArena<'a>>,
@@ -21,8 +21,6 @@ pub struct SkyInfo {
 	pub floor_colour: i32,
 	pub y: i32,
 	pub x: i32,
-	pub src_width: u32,
-	pub src_height: u32,
 	pub dest_width: u32,
 	pub dest_height: u32,
 	pub reflected_top_colour: i32,
@@ -83,6 +81,8 @@ impl<'a> Dti<'a> {
 		let player_start_angle;
 		let sky_info: SkyInfo;
 		let translucent_colours;
+		let sky_src_width: u16;
+		let sky_src_height: u16;
 		{
 			data.set_position(player_and_sky_offset);
 			let arena_index = data.u32();
@@ -108,16 +108,17 @@ impl<'a> Dti<'a> {
 				(src_height, dest_width)
 			};
 
+			sky_src_height = src_height as u16;
+			sky_src_width = src_width as u16;
+
 			sky_info = SkyInfo {
 				ceiling_colour,
 				floor_colour,
 				y,
 				x,
 				dest_width,
-				src_height,
 				reflected_top_colour,
 				reflected_bottom_colour,
-				src_width,
 				dest_height,
 			};
 
@@ -237,11 +238,11 @@ impl<'a> Dti<'a> {
 		}
 
 		// skybox
-		let sky_pixels;
-		{
+		let skybox = {
 			data.set_position(skybox_offset);
-			sky_pixels = data.slice(sky_info.src_width as usize * sky_info.src_height as usize);
-		}
+			let sky_pixels = data.slice(sky_src_width as usize * sky_src_height as usize);
+			Texture::new(sky_src_width, sky_src_height, sky_pixels)
+		};
 
 		let filename_footer = data.str(12);
 		assert_eq!(filename, filename_footer);
@@ -252,7 +253,7 @@ impl<'a> Dti<'a> {
 			player_start_pos,
 			player_start_angle,
 			sky_info,
-			sky_pixels,
+			skybox,
 			translucent_colours,
 			arenas,
 			num_pal_free_pixels,
@@ -262,13 +263,7 @@ impl<'a> Dti<'a> {
 
 	pub fn save(&self, output: &mut OutputWriter) {
 		output.write_palette("palette", self.pal);
-		output.write_png(
-			"skybox",
-			self.sky_info.src_width,
-			self.sky_info.src_height,
-			self.sky_pixels,
-			Some(self.pal),
-		);
+		self.skybox.save_as("skybox", output, Some(self.pal));
 
 		use std::fmt::Write;
 		let mut info = format!(

@@ -82,8 +82,12 @@ impl<'a> Bni<'a> {
 			}
 
 			// 2d animation
-			if let Some(anim) = image_formats::try_parse_animation(&mut reader.clone()) {
-				animations_2d.push((name, anim));
+			if let Some(mut anim) = image_formats::try_parse_animation(&mut reader.clone()) {
+				if anim.len() == 1 {
+					textures.push((name, anim.pop().unwrap()));
+				} else {
+					animations_2d.push((name, anim));
+				}
 				continue;
 			}
 

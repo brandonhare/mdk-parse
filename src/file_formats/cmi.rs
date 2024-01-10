@@ -29,6 +29,7 @@ pub struct CmiEntity<'a> {
 	pub animation_names: Vec<&'a str>,
 	pub splines: Vec<u32>,
 	pub scripts: Vec<u32>,
+	pub arenas: Vec<&'a str>,
 }
 
 impl<'a> Cmi<'a> {
@@ -59,7 +60,7 @@ impl<'a> Cmi<'a> {
 
 			let (arena_name, entity_name) = name.split_once('$').unwrap();
 			let (entity_name, entity_id) =
-				entity_name.split_once('_').unwrap_or((entity_name, "?"));
+				entity_name.split_once('_').unwrap_or((entity_name, "None"));
 
 			scripts.push((
 				init_script_offset,
@@ -68,7 +69,7 @@ impl<'a> Cmi<'a> {
 					source_name: entity_name,
 					target_name: entity_name,
 					source_offset: 0,
-					reason: format!("Init (id: {entity_id})").into(),
+					reason: format!("Init (id {entity_id})").into(),
 				},
 			));
 		}
@@ -146,18 +147,16 @@ impl<'a> Cmi<'a> {
 				entities: Vec::new(),
 			});
 
-			if script_offset != 0 {
-				scripts.push((
-					script_offset,
-					CmiCallOrigin {
-						arena_name: name,
-						source_name: name,
-						target_name: name,
-						source_offset: 0,
-						reason: "Setup".into(),
-					},
-				));
-			}
+			scripts.push((
+				script_offset,
+				CmiCallOrigin {
+					arena_name: name,
+					source_name: name,
+					target_name: name,
+					source_offset: 0,
+					reason: "Setup".into(),
+				},
+			));
 		}
 
 		// parse all scripts
@@ -189,6 +188,7 @@ impl<'a> Cmi<'a> {
 			entity.animations.extend_from_slice(&script.anim_offsets);
 			entity.splines.extend_from_slice(&script.path_offsets);
 			entity.scripts.push(target_offset);
+			entity.arenas.push(origin.arena_name);
 
 			if origin.target_name != origin.arena_name {
 				result
@@ -202,6 +202,7 @@ impl<'a> Cmi<'a> {
 
 			script.call_origins.push(origin);
 		}
+		// finished parsing entities
 
 		for script in result.scripts.values_mut() {
 			script.call_origins.sort_unstable();
@@ -214,6 +215,9 @@ impl<'a> Cmi<'a> {
 
 		// parse animations and splines
 		for entity in result.entities.values_mut() {
+			entity.arenas.sort_unstable();
+			entity.arenas.dedup();
+
 			entity.animation_names.sort_unstable();
 			entity.animation_names.dedup();
 

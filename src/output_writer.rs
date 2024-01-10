@@ -39,7 +39,11 @@ impl OutputWriter {
 	}
 
 	pub fn write(&mut self, asset_name: &str, ext: &str, data: impl AsRef<[u8]>) {
-		fs::write(self.set_output_path(asset_name, ext), data).expect("failed to write file");
+		let path = self.set_output_path(asset_name, ext);
+
+		if let Err(e) = fs::write(path, data) {
+			panic!("failed to write file {}: {e}", path.display());
+		};
 	}
 
 	pub fn write_png(

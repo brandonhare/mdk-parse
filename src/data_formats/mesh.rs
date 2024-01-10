@@ -42,7 +42,7 @@ impl MeshGeo {
 		Some(MeshGeo { verts, tris, bbox })
 	}
 
-	pub fn add_to_gltf(
+	fn add_to_gltf(
 		&self, gltf: &mut gltf::Gltf, name: String, target: Option<gltf::NodeIndex>,
 	) -> gltf::NodeIndex {
 		// todo materials

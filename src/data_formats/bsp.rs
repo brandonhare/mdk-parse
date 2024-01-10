@@ -1,4 +1,4 @@
-use crate::data_formats::mesh::{MeshGeo, MeshTri};
+use crate::data_formats::mesh::{Mesh, MeshGeo, MeshTri, MeshType};
 use crate::{gltf, OutputWriter, Reader, Vec3};
 
 pub struct BspPlane {
@@ -14,8 +14,7 @@ pub struct BspPlane {
 
 pub struct Bsp<'a> {
 	pub planes: Vec<BspPlane>,
-	pub materials: Vec<&'a str>,
-	pub mesh: MeshGeo,
+	pub mesh: Mesh<'a>,
 }
 
 impl<'a> Bsp<'a> {
@@ -71,8 +70,11 @@ impl<'a> Bsp<'a> {
 
 		Bsp {
 			planes,
-			materials,
-			mesh: MeshGeo { verts, tris, bbox },
+			mesh: Mesh {
+				materials,
+				reference_points: Vec::new(),
+				mesh_data: MeshType::Single(MeshGeo { verts, tris, bbox }),
+			},
 		}
 	}
 

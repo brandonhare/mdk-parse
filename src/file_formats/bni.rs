@@ -222,7 +222,7 @@ impl<'a> Bni<'a> {
 		);
 
 		save_items("meshes", output, &self.meshes, |name, mesh, output| {
-			mesh.save_as(name, output)
+			mesh.save_as(name, output, None)
 		});
 
 		save_items("palettes", output, &self.palettes, |name, pal, output| {

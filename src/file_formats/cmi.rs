@@ -273,7 +273,7 @@ impl<'a> Cmi<'a> {
 
 			// save mesh
 			if let Some(mesh) = &entity.mesh {
-				mesh.save_as(entity_name, &mut output);
+				mesh.save_as(entity_name, &mut output, None);
 			}
 
 			// save animations

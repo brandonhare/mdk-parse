@@ -1,3 +1,4 @@
+use crate::data_formats::image_formats::ColourMap;
 use crate::{gltf, OutputWriter, Reader, Vec2, Vec3};
 
 pub struct Mesh<'a> {
@@ -62,6 +63,14 @@ impl MeshGeo {
 		gltf.set_node_mesh(target, mesh);
 
 		target
+	}
+
+	fn get_used_colours(&self, colours: &mut ColourMap) {
+		for tri in &self.tris {
+			if (-256..=-1).contains(&tri.material_index) {
+				colours.push((-1 - tri.material_index) as u8);
+			}
+		}
 	}
 }
 
@@ -168,17 +177,20 @@ impl<'a> Mesh<'a> {
 		})
 	}
 
-	pub fn save_as(&self, name: &str, output: &mut OutputWriter) {
+	pub fn save_as(
+		&self, name: &str, output: &mut OutputWriter, textures: Option<&dyn TextureHolder>,
+	) {
 		let mut gltf = gltf::Gltf::new(name.to_owned());
 
 		let root = gltf.get_root_node();
-		self.add_to_gltf(&mut gltf, name.to_owned(), Some(root));
+		self.add_to_gltf(&mut gltf, name.to_owned(), Some(root), textures);
 
 		output.write(name, "gltf", gltf.render_json().as_bytes());
 	}
 
 	pub fn add_to_gltf(
 		&self, gltf: &mut gltf::Gltf, name: String, target: Option<gltf::NodeIndex>,
+		textures: Option<&dyn TextureHolder>,
 	) -> gltf::NodeIndex {
 		let target = target.unwrap_or_else(|| gltf.create_node(name.clone(), None));
 
@@ -205,4 +217,44 @@ impl<'a> Mesh<'a> {
 
 		target
 	}
+
+	pub fn get_used_colours(&self, textures: Option<&dyn TextureHolder>) -> ColourMap {
+		let mut result = ColourMap::new();
+		if let Some(textures) = textures {
+			for mat in &self.materials {
+				textures.get_used_colours(mat, &mut result);
+			}
+		}
+		match &self.mesh_data {
+			MeshType::Single(geo) => geo.get_used_colours(&mut result),
+			MeshType::Multimesh { submeshes, .. } => {
+				for mesh in submeshes {
+					mesh.mesh_data.get_used_colours(&mut result);
+				}
+			}
+		}
+		result
+	}
+}
+
+pub trait TextureHolder {
+	fn lookup(&mut self, name: &str) -> TextureResult;
+	fn get_used_colours(&self, name: &str, colours: &mut ColourMap);
+	fn get_palette(&self) -> &[u8];
+	fn get_transparent_colours(&self) -> [[u8; 4]; 4];
+}
+
+pub enum TextureResult<'a> {
+	None,
+	Pen(i32),
+	SaveRef {
+		width: u16,
+		height: u16,
+		path: &'a str,
+	},
+	SaveInline {
+		width: u16,
+		height: u16,
+		pixels: &'a [u8],
+	},
 }

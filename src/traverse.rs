@@ -1,82 +1,56 @@
 use std::collections::HashMap;
 use std::fmt::Write;
 
-use crate::data_formats::{Mesh, SoundInfo, Texture};
+use crate::data_formats::{
+	image_formats::ColourMap, Mesh, SoundInfo, Texture, TextureHolder, TextureResult,
+};
 use crate::file_formats::{mti::Material, Bni, Cmi, Dti, Mti, Mto, Sni};
 use crate::{output_writer::OutputWriter, reader::Reader};
 
-struct ColourMap([u64; 4]);
-impl ColourMap {
-	fn from_tex(tex: &Texture) -> Self {
-		Self::new(&tex.pixels)
-	}
-	fn from_frames(frames: &[Texture]) -> Self {
-		let mut result = Self([0; 4]);
-		for frame in frames {
-			result.extend(&frame.pixels);
-		}
-		result
-	}
-	fn new(pixels: &[u8]) -> Self {
-		let mut result = Self([0; 4]);
-		result.extend(pixels);
-		result
-	}
-	fn extend(&mut self, pixels: &[u8]) {
-		for &p in pixels {
-			self.0[(p >> 6) as usize] |= 1 << (p & 63);
-		}
-	}
-
-	fn compare(&self, pal1: &[u8], pal2: &[u8]) -> bool {
-		debug_assert_eq!(pal1.len(), 256 * 3);
-		debug_assert_eq!(pal2.len(), 256 * 3);
-
-		for (&mask, (block1, block2)) in self
-			.0
-			.iter()
-			.zip(pal1.chunks_exact(64 * 3).zip(pal2.chunks_exact(64 * 3)))
-		{
-			for i in 0..64 {
-				if mask & (1 << i) != 0 && block1[i * 3..(i + 1) * 3] != block2[i * 3..(i + 1) * 3]
-				{
-					return false;
-				}
-			}
-		}
-		true
-	}
-}
-
-fn filter_textures(frames: &[Texture], palettes: &HashMap<&str, Vec<u8>>, arenas: &mut Vec<&str>) {
+fn filter_textures<'a>(
+	frames: &[Texture], palettes: &HashMap<&str, Vec<u8>>, arenas: &mut Vec<(&'a str, &'a str)>,
+) -> usize {
 	if arenas.len() == 1 {
-		return;
+		return 1;
+	}
+	let colour_map = ColourMap::from_frames(frames);
+	filter_colours(colour_map, palettes, arenas)
+}
+fn filter_colours<'a>(
+	colour_map: ColourMap, palettes: &HashMap<&str, Vec<u8>>, arenas: &mut Vec<(&'a str, &'a str)>,
+) -> usize {
+	if arenas.len() == 1 {
+		return 1;
+	}
+
+	for arena in arenas.iter_mut() {
+		debug_assert_eq!(arena.0, arena.1);
+		arena.1 = arena.0;
 	}
 	arenas.sort_unstable_by(|arena1, arena2| {
-		let c1 = arena1.as_bytes()[0] == b'C';
-		let c2 = arena2.as_bytes()[0] == b'C';
-		c1.cmp(&c2).then(arena1.cmp(arena2))
+		let c1 = arena1.0.as_bytes()[0] == b'C';
+		let c2 = arena2.0.as_bytes()[0] == b'C';
+		c1.cmp(&c2).then(arena1.0.cmp(arena2.0))
 	});
 	arenas.dedup();
-	let colour_map = ColourMap::from_frames(frames);
+
+	let mut num_unique = arenas.len();
 	for i in 1..arenas.len() {
-		let arena1 = arenas[i];
+		let arena1 = arenas[i].0;
 		let pal1 = &palettes[arena1];
-		for &arena2 in &arenas[0..i] {
-			if arena2.is_empty() {
+		for (arena2_src, arena2_dest) in &arenas[0..i] {
+			if arena2_src != arena2_dest {
 				continue;
 			}
-			let pal2 = &palettes[arena2];
+			let pal2 = &palettes[arena2_src];
 			if colour_map.compare(pal1, pal2) {
-				arenas[i] = "";
+				arenas[i].1 = *arena2_src;
+				num_unique -= 1;
 				break;
 			}
 		}
 	}
-	arenas.retain(|name| !name.is_empty());
-}
-fn filter_texture(tex: &Texture, palettes: &HashMap<&str, Vec<u8>>, arenas: &mut Vec<&str>) {
-	filter_textures(std::slice::from_ref(tex), palettes, arenas)
+	num_unique
 }
 
 pub fn parse_traverse() {
@@ -120,7 +94,7 @@ pub fn parse_traverse() {
 
 		// load files
 		let cmi = read_file(".CMI");
-		let cmi = Cmi::parse(Reader::new(&cmi));
+		let mut cmi = Cmi::parse(Reader::new(&cmi));
 		let dti = read_file(".DTI");
 		let dti = Dti::parse(Reader::new(&dti));
 		let mto = read_file("O.MTO");
@@ -155,12 +129,6 @@ pub fn parse_traverse() {
 				.map(|(name, frames)| (*name, frames.as_slice())),
 		);
 
-		all_meshes.extend(
-			cmi.entities
-				.iter()
-				.filter_map(|(&name, entity)| entity.mesh.as_ref().map(|mesh| (name, mesh))),
-		);
-
 		all_sounds.extend(sni_o.sounds.iter().map(|(name, sound)| (*name, sound)));
 		all_sounds.extend(sni_s.sounds.iter().map(|(name, sound)| (*name, sound)));
 		all_meshes.extend(sni_o.bsps.iter().map(|(name, bsp)| (*name, &bsp.mesh)));
@@ -193,8 +161,21 @@ pub fn parse_traverse() {
 		}
 
 		for arena in &mto.arenas {
-			all_meshes.extend(arena.meshes.iter().map(|(name, mesh)| (*name, mesh)));
+			for (mesh_name, mesh) in &arena.meshes {
+				all_meshes.insert(mesh_name, mesh);
+				let entity_arenas = &mut cmi.entities.entry(mesh_name).or_default().arenas;
+				if !entity_arenas.contains(&arena.name) {
+					entity_arenas.push(arena.name);
+					entity_arenas.sort_unstable();
+				}
+			}
 			all_meshes.insert(arena.name, &arena.bsp.mesh);
+			let entity_arenas = &mut cmi.entities.entry(arena.name).or_default().arenas;
+			if !entity_arenas.contains(&arena.name) {
+				entity_arenas.push(arena.name);
+				entity_arenas.sort_unstable();
+			}
+
 			// don't add arena sounds, do that later so we can organize them in folders
 
 			let num_bytes = dti.num_pal_free_pixels as usize * 3;
@@ -227,6 +208,22 @@ pub fn parse_traverse() {
 			}
 		}
 
+		// register corridor and level meshes in cmi entities
+		for &mesh_name in all_meshes.keys() {
+			if !palettes.contains_key(mesh_name) {
+				continue;
+			}
+			let entity_arenas = &mut cmi.entities.entry(mesh_name).or_default().arenas;
+			entity_arenas.clear();
+			entity_arenas.push(mesh_name);
+		}
+
+		all_meshes.extend(
+			cmi.entities
+				.iter()
+				.filter_map(|(&name, entity)| entity.mesh.as_ref().map(|mesh| (name, mesh))),
+		);
+
 		// save sounds
 		{
 			let mut output = output.push_dir("Sounds");
@@ -255,11 +252,11 @@ pub fn parse_traverse() {
 			}
 		}
 
-		let mut used_textures = HashMap::<&str, Vec<&str>>::new();
+		let mut used_textures = HashMap::<&str, Vec<(&str, &str)>>::new();
 
-		// save meshes
+		// save meshes/textures
 		{
-			let output = output.push_dir("Meshes");
+			let mut output = output.push_dir("Meshes");
 			for (&name, mesh) in all_meshes.iter() {
 				let Some(arenas) = cmi
 					.entities
@@ -274,7 +271,7 @@ pub fn parse_traverse() {
 							used_textures
 								.entry(tex_name)
 								.or_default()
-								.extend(palettes.keys());
+								.extend(palettes.keys().map(|arena| (*arena, *arena)));
 						} else if !all_pens.contains_key(tex_name) {
 							//println!("level {level_index} mesh {name} missing tex {tex_name}"); // todo
 						}
@@ -288,32 +285,174 @@ pub fn parse_traverse() {
 						used_textures
 							.entry(tex_name)
 							.or_default()
-							.extend(arenas.iter());
+							.extend(arenas.iter().map(|arena| (*arena, *arena)));
 					} else if !all_pens.contains_key(tex_name) {
 						//println!("level {level_index} mesh {name} missing tex {tex_name}"); // todo
 					}
 				}
 			}
 
-			// save textures
+			// save mesh textures
 
-			let mut output = output.push_dir("Textures"); // inside mesh folder
-			for (&name, arenas) in used_textures.iter_mut() {
-				let tex = all_textures[name];
-				filter_textures(tex, &palettes, arenas);
+			{
+				let mut output = output.push_dir("Textures"); // inside mesh folder
+				for (&name, arenas) in used_textures.iter_mut() {
+					let tex = all_textures[name];
+					let num_unique = filter_textures(tex, &palettes, arenas);
 
-				if arenas.len() == 1 {
-					Texture::save_animated(tex, name, 24, &mut output, Some(&palettes[arenas[0]]));
+					if num_unique == 1 {
+						Texture::save_animated(
+							tex,
+							name,
+							24,
+							&mut output,
+							Some(&palettes[arenas[0].0]),
+						);
+					} else {
+						for (arena_src, arena_dest) in arenas.iter() {
+							if arena_src == arena_dest {
+								temp_filename.clear();
+								write!(temp_filename, "{name}_{arena_src}").unwrap();
+								Texture::save_animated(
+									tex,
+									&temp_filename,
+									24,
+									&mut output,
+									Some(&palettes[arena_src]),
+								);
+							}
+						}
+					}
+				}
+			}
+
+			struct TravTextureLookup<'a> {
+				translucent_colours: [[u8; 4]; 4],
+				pens: &'a HashMap<&'a str, i32>,
+				textures: &'a HashMap<&'a str, &'a [Texture<'a>]>,
+				texture_arenas: &'a HashMap<&'a str, Vec<(&'a str, &'a str)>>,
+				palette: &'a [u8],
+				current_arena: &'a str,
+				path_buf: String,
+			}
+			impl<'a> TextureHolder for TravTextureLookup<'a> {
+				fn lookup(&mut self, name: &str) -> TextureResult {
+					if let Some(arenas) = self.texture_arenas.get(name) {
+						let is_unique = arenas[1..].iter().all(|(src, dest)| src != dest);
+
+						self.path_buf.clear();
+						if is_unique {
+							write!(self.path_buf, "Textures/{name}.png").unwrap();
+						} else {
+							let dest_arena = arenas
+								.iter()
+								.find(|(src, _)| *src == self.current_arena)
+								.unwrap()
+								.1;
+							write!(self.path_buf, "Texture/{name}/{dest_arena}.png").unwrap();
+						}
+						let tex = self.textures[name];
+						let width = tex[0].width;
+						let height = tex[0].height;
+						assert!(tex[1..]
+							.iter()
+							.all(|t| t.width == width && t.height == height));
+						return TextureResult::SaveRef {
+							width,
+							height,
+							path: &self.path_buf,
+						};
+					}
+					if let Some(pen) = self.pens.get(name) {
+						return TextureResult::Pen(*pen);
+					}
+					eprintln!("missing texture {name}");
+					TextureResult::None
+				}
+				fn get_used_colours(&self, name: &str, colours: &mut ColourMap) {
+					if let Some(tex) = self.textures.get(name) {
+						for frame in *tex {
+							colours.extend(frame.pixels.iter());
+						}
+					} else if let Some(&pen) = self.pens.get(name) {
+						if pen < 256 {
+							colours.push(pen as u8);
+						}
+					}
+				}
+				fn get_palette(&self) -> &[u8] {
+					debug_assert!(self.palette.len() == 256 * 3);
+					self.palette
+				}
+				fn get_transparent_colours(&self) -> [[u8; 4]; 4] {
+					self.translucent_colours
+				}
+			}
+
+			let mut textures = TravTextureLookup {
+				translucent_colours: dti.translucent_colours,
+				pens: &all_pens,
+				textures: &all_textures,
+				texture_arenas: &used_textures,
+				palette: &[],
+				current_arena: "",
+				path_buf: String::new(),
+			};
+
+			// save meshes
+			let mut mesh_arenas = Vec::new();
+			for (&name, &mesh) in all_meshes.iter() {
+				mesh_arenas.clear();
+
+				if let Some(cmi_entity) = cmi.entities.get(name) {
+					mesh_arenas.extend(cmi_entity.arenas.iter().map(|arena| (*arena, *arena)));
+				}
+
+				if mesh_arenas.is_empty() {
+					for matname in &mesh.materials {
+						let Some(tex_arenas) = used_textures.get(matname) else {
+							continue;
+						};
+						for (src, dest) in tex_arenas {
+							if src == dest {
+								mesh_arenas.push((src, src));
+							}
+						}
+					}
+				}
+				if mesh_arenas.is_empty() {
+					// todo
+					// eprintln!("level {level_index} mesh {name} cant find arenas");
+					mesh_arenas.extend(mto.arenas.iter().map(|arena| (arena.name, arena.name)));
+				}
+
+				mesh_arenas.sort_unstable();
+				mesh_arenas.dedup();
+
+				let used_colours = mesh.get_used_colours(Some(&textures));
+				let num_unique_arenas = filter_colours(used_colours, &palettes, &mut mesh_arenas);
+
+				if num_unique_arenas == 1 {
+					textures.current_arena = mesh_arenas[0].0;
+					textures.palette = &palettes[textures.current_arena];
+					mesh.save_as(name, &mut output, Some(&textures));
 				} else {
-					let mut output = output.push_dir(name);
-					for arena in arenas.iter() {
-						Texture::save_animated(tex, arena, 24, &mut output, Some(&palettes[arena]));
+					// save multiple meshes with the different textures
+					for (src, dest) in &mesh_arenas {
+						if src != dest {
+							continue;
+						}
+						textures.current_arena = src;
+						textures.palette = &palettes[textures.current_arena];
+						temp_filename.clear();
+						write!(temp_filename, "{name}_{src}").unwrap();
+						mesh.save_as(&temp_filename, &mut output, Some(&textures));
 					}
 				}
 			}
 		}
 
-		let mut temp_arenas: Vec<&str> = Vec::new();
+		let mut temp_arenas: Vec<(&str, &str)> = Vec::new();
 		// save unused/other textures
 		{
 			let mut tex_output = output.push_dir("Other Textures");
@@ -326,21 +465,36 @@ pub fn parse_traverse() {
 					continue;
 				}
 				temp_arenas.clear();
-				temp_arenas.extend(palettes.keys());
+				temp_arenas.extend(palettes.keys().map(|arena| (*arena, *arena)));
 				temp_arenas.sort_unstable();
-				filter_textures(tex, &palettes, &mut temp_arenas);
+				let num_unique = filter_textures(tex, &palettes, &mut temp_arenas);
 
 				let output = if tex.len() == 1 {
 					&mut tex_output
 				} else {
 					&mut anim_output
 				};
-				if temp_arenas.len() == 1 {
-					Texture::save_animated(tex, name, 24, output, Some(&palettes[temp_arenas[0]]));
+				if num_unique == 1 {
+					Texture::save_animated(
+						tex,
+						name,
+						24,
+						output,
+						Some(&palettes[temp_arenas[0].0]),
+					);
 				} else {
-					let mut output = output.push_dir(name);
-					for arena in temp_arenas.iter() {
-						Texture::save_animated(tex, arena, 24, &mut output, Some(&palettes[arena]));
+					for (arena_src, arena_dest) in temp_arenas.iter() {
+						if arena_src == arena_dest {
+							temp_filename.clear();
+							write!(temp_filename, "{name}_{arena_src}").unwrap();
+							Texture::save_animated(
+								tex,
+								&temp_filename,
+								24,
+								output,
+								Some(&palettes[arena_src]),
+							);
+						}
 					}
 				}
 			}

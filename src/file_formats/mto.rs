@@ -138,7 +138,7 @@ impl<'a> Mto<'a> {
 			if !arena.meshes.is_empty() {
 				let mut output = output.push_dir("meshes");
 				for (name, mesh) in &arena.meshes {
-					mesh.save_as(name, &mut output);
+					mesh.save_as(name, &mut output, None);
 				}
 			}
 			if !arena.sounds.is_empty() {
@@ -150,7 +150,7 @@ impl<'a> Mto<'a> {
 				output.write("sounds", "tsv", &sound_summary);
 			}
 
-			arena.bsp.save_as(arena.name, &mut output);
+			arena.bsp.save_as(arena.name, &mut output, None);
 
 			output.write_palette("PAL", arena.palette);
 

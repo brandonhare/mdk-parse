@@ -78,7 +78,7 @@ impl<'a> Sni<'a> {
 		if !self.bsps.is_empty() {
 			let mut bsp_output = output.push_dir("bsps");
 			for (name, bsp) in self.bsps.iter() {
-				bsp.save_as(name, &mut bsp_output);
+				bsp.save_as(name, &mut bsp_output, None);
 			}
 		}
 

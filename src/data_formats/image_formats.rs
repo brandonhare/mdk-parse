@@ -212,3 +212,59 @@ pub fn try_parse_crossfade_image<'a>(
 
 	Some(([lut1, lut2], Texture::new(width, height, pixels)))
 }
+
+pub struct ColourMap([u64; 4]);
+impl ColourMap {
+	pub fn new() -> Self {
+		Self([0; 4])
+	}
+	pub fn from_tex(tex: &Texture) -> Self {
+		Self::from_pixels(&tex.pixels)
+	}
+	pub fn from_frames(frames: &[Texture]) -> Self {
+		let mut result = Self::new();
+		for frame in frames {
+			result.extend(frame.pixels.iter());
+		}
+		result
+	}
+	pub fn from_pixels(pixels: &[u8]) -> Self {
+		let mut result = Self::new();
+		result.extend(pixels);
+		result
+	}
+	pub fn push(&mut self, index: u8) {
+		self.0[(index >> 6) as usize] |= 1 << (index & 63);
+	}
+
+	pub fn compare(&self, pal1: &[u8], pal2: &[u8]) -> bool {
+		debug_assert_eq!(pal1.len(), 256 * 3);
+		debug_assert_eq!(pal2.len(), 256 * 3);
+
+		for (&mask, (block1, block2)) in self
+			.0
+			.iter()
+			.zip(pal1.chunks_exact(64 * 3).zip(pal2.chunks_exact(64 * 3)))
+		{
+			for i in 0..64 {
+				if mask & (1 << i) != 0 && block1[i * 3..(i + 1) * 3] != block2[i * 3..(i + 1) * 3]
+				{
+					return false;
+				}
+			}
+		}
+		true
+	}
+}
+impl Extend<u8> for ColourMap {
+	fn extend<Iter: IntoIterator<Item = u8>>(&mut self, iter: Iter) {
+		for p in iter {
+			self.push(p);
+		}
+	}
+}
+impl<'a> Extend<&'a u8> for ColourMap {
+	fn extend<Iter: IntoIterator<Item = &'a u8>>(&mut self, iter: Iter) {
+		self.extend(iter.into_iter().copied());
+	}
+}

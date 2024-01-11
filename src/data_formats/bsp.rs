@@ -1,4 +1,4 @@
-use crate::data_formats::mesh::{Mesh, MeshGeo, MeshTri, MeshType};
+use crate::data_formats::mesh::{Mesh, MeshGeo, MeshTri, MeshType, TextureHolder};
 use crate::{gltf, OutputWriter, Reader, Vec3};
 
 pub struct BspPlane {
@@ -78,11 +78,9 @@ impl<'a> Bsp<'a> {
 		}
 	}
 
-	pub fn save_as(&self, name: &str, output: &mut OutputWriter) {
-		let mut gltf = gltf::Gltf::new(name.to_owned());
-		let root = gltf.get_root_node();
-		self.mesh
-			.add_to_gltf(&mut gltf, name.to_owned(), Some(root));
-		output.write(name, "gltf", gltf.render_json().as_bytes());
+	pub fn save_as(
+		&self, name: &str, output: &mut OutputWriter, textures: Option<&dyn TextureHolder>,
+	) {
+		self.mesh.save_as(name, output, textures)
 	}
 }

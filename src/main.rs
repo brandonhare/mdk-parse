@@ -189,7 +189,10 @@ fn main() {
 
 	let start_time = std::time::Instant::now();
 
-	traverse::parse_traverse();
+	let save_sounds = true;
+	let save_textures = true;
+	let save_meshes = true;
+	traverse::parse_traverse(save_sounds, save_textures, save_meshes);
 
 	//for_all_ext("assets", "dti", parse_dti);
 	//for_all_ext("assets", "bni", parse_bni);

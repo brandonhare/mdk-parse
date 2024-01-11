@@ -3,7 +3,11 @@ fall3d.bni/zoom animation palette
 mesh reference points purpose
 textures a, b, flags?
 sni sound type values
-traverse mesh textures
 traverse 3d animations
 traverse other output? splines? scripts? reports?
 traverse unused meshes/textures?
+fix wrong outlines (backfaces?)
+fix shiny z-fighting
+masked mesh textures
+some wrong colours
+shiny types?

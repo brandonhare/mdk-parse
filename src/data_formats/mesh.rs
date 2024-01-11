@@ -1,4 +1,4 @@
-use crate::data_formats::image_formats::ColourMap;
+use crate::data_formats::{image_formats::ColourMap, Texture};
 use crate::{gltf, OutputWriter, Reader, Vec2, Vec3};
 
 pub struct Mesh<'a> {
@@ -43,28 +43,6 @@ impl MeshGeo {
 		Some(MeshGeo { verts, tris, bbox })
 	}
 
-	fn add_to_gltf(
-		&self, gltf: &mut gltf::Gltf, name: String, target: Option<gltf::NodeIndex>,
-	) -> gltf::NodeIndex {
-		// todo materials
-
-		let target = target.unwrap_or_else(|| gltf.create_node(name.clone(), None));
-		assert!(
-			gltf.get_node_mesh(target).is_none(),
-			"tried to replace mesh node"
-		);
-
-		let indices: Vec<u16> = self
-			.tris
-			.iter()
-			.flat_map(|tri| [tri.indices[0], tri.indices[2], tri.indices[1]]) // swizzle indices
-			.collect();
-		let mesh = gltf.create_mesh_from_primitive(name, &self.verts, &indices, None, None);
-		gltf.set_node_mesh(target, mesh);
-
-		target
-	}
-
 	fn get_used_colours(&self, colours: &mut ColourMap) {
 		for tri in &self.tris {
 			if (-256..=-1).contains(&tri.material_index) {
@@ -79,6 +57,14 @@ pub struct Submesh<'a> {
 	pub name: &'a str,
 	pub origin: Vec3,
 }
+
+const TRIFLAG_HIDDEN: u32 = 0x2;
+const TRIFLAG_OUTLINE_12: u32 = 0x10_00_00;
+const TRIFLAG_OUTLINE_23: u32 = 0x20_00_00;
+const TRIFLAG_OUTLINE_13: u32 = 0x40_00_00;
+const TRIFLAG_DRAW_OUTLINE: u32 = 0x80_00_00;
+const TRIFLAG_OUTLINE_MASK: u32 = 0xF0_00_00;
+const TRIFLAG_ID_MASK: u32 = 0xFF_00_00_00;
 
 pub struct MeshTri {
 	pub indices: [u16; 3],
@@ -113,13 +99,6 @@ impl MeshTri {
 
 	pub fn id(&self) -> u8 {
 		(self.flags >> 24) as u8
-	}
-	pub fn outlines(&self) -> [bool; 3] {
-		[
-			self.flags & 0x100000 != 0,
-			self.flags & 0x200000 != 0,
-			self.flags & 0x400000 != 0,
-		]
 	}
 }
 
@@ -177,32 +156,54 @@ impl<'a> Mesh<'a> {
 		})
 	}
 
-	pub fn save_as(
-		&self, name: &str, output: &mut OutputWriter, textures: Option<&dyn TextureHolder>,
+	pub fn save_as(&self, name: &str, output: &mut OutputWriter) {
+		let mut gltf = gltf::Gltf::new(name.to_owned());
+
+		let root = gltf.get_root_node();
+		self.add_to_gltf(&mut gltf, name, Some(root));
+
+		output.write(name, "gltf", gltf.render_json().as_bytes());
+	}
+	pub fn save_textured_as(
+		&self, name: &str, output: &mut OutputWriter, textures: &mut impl TextureHolder<'a>,
 	) {
 		let mut gltf = gltf::Gltf::new(name.to_owned());
 
 		let root = gltf.get_root_node();
-		self.add_to_gltf(&mut gltf, name.to_owned(), Some(root), textures);
+		self.add_to_gltf_textured(&mut gltf, name, Some(root), textures);
 
 		output.write(name, "gltf", gltf.render_json().as_bytes());
 	}
 
 	pub fn add_to_gltf(
-		&self, gltf: &mut gltf::Gltf, name: String, target: Option<gltf::NodeIndex>,
-		textures: Option<&dyn TextureHolder>,
+		&self, gltf: &mut gltf::Gltf, name: &str, target: Option<gltf::NodeIndex>,
 	) -> gltf::NodeIndex {
-		let target = target.unwrap_or_else(|| gltf.create_node(name.clone(), None));
+		let target = target.unwrap_or_else(|| gltf.create_node(name.to_owned(), None));
+
+		let create_submesh =
+			|gltf: &mut gltf::Gltf, name: String, geo: &MeshGeo| -> gltf::MeshIndex {
+				let indices: Vec<_> = geo
+					.tris
+					.iter()
+					.flat_map(|tri| {
+						let [i1, i2, i3] = tri.indices;
+						[i1, i3, i2]
+					})
+					.collect();
+				gltf.create_mesh_from_primitive(name, &geo.verts, &indices, None, None)
+			};
 
 		match &self.mesh_data {
 			MeshType::Single(geo) => {
-				geo.add_to_gltf(gltf, name, Some(target));
+				let submesh = create_submesh(gltf, name.to_owned(), geo);
+				gltf.set_node_mesh(target, submesh);
 			}
 			MeshType::Multimesh { submeshes, .. } => {
 				for sub in submeshes {
-					let sub_node = sub.mesh_data.add_to_gltf(gltf, sub.name.to_owned(), None);
+					let submesh = create_submesh(gltf, sub.name.to_owned(), &sub.mesh_data);
+					let sub_node =
+						gltf.create_child_node(target, sub.name.to_owned(), Some(submesh));
 					gltf.set_node_position(sub_node, sub.origin);
-					gltf.set_node_parent(target, sub_node);
 				}
 			}
 		}
@@ -218,12 +219,315 @@ impl<'a> Mesh<'a> {
 		target
 	}
 
-	pub fn get_used_colours(&self, textures: Option<&dyn TextureHolder>) -> ColourMap {
-		let mut result = ColourMap::new();
-		if let Some(textures) = textures {
-			for mat in &self.materials {
-				textures.get_used_colours(mat, &mut result);
+	pub fn add_to_gltf_textured(
+		&self, gltf: &mut gltf::Gltf, name: &str, target: Option<gltf::NodeIndex>,
+		textures: &mut impl TextureHolder<'a>,
+	) -> gltf::NodeIndex {
+		let mut materials: Vec<(TextureResult, Option<gltf::MaterialIndex>)> = self
+			.materials
+			.iter()
+			.map(|mat| (textures.lookup(mat), None))
+			.collect();
+
+		let palette = textures.get_palette();
+		let translucent_colours = textures.get_transparent_colours();
+
+		let mut colour_mat: Option<gltf::MaterialIndex> = None;
+		let mut translucent_mat: Option<gltf::MaterialIndex> = None;
+		let mut shiny_mat: Option<gltf::MaterialIndex> = None;
+
+		#[derive(Default)]
+		struct MeshPrimitive {
+			verts: Vec<Vec3>,
+			indices: Vec<u16>,
+			uvs: Vec<Vec2>,
+			colours: Vec<[u8; 4]>,
+			material: Option<gltf::MaterialIndex>,
+			uv_scale: Vec2,
+		}
+		impl MeshPrimitive {
+			fn clear(&mut self) {
+				self.verts.clear();
+				self.indices.clear();
+				self.uvs.clear();
+				self.colours.clear();
+				self.material = None;
+				self.uv_scale = [1.0; 2];
 			}
+		}
+
+		let mut prims = Vec::<MeshPrimitive>::new();
+		prims.resize_with(materials.len(), Default::default);
+		let mut colour_prim = MeshPrimitive::default();
+		let mut translucent_prim = MeshPrimitive::default();
+		let mut lines_prim = MeshPrimitive::default();
+		let mut shiny_prim = MeshPrimitive::default();
+
+		let mut create_submesh = |gltf: &mut gltf::Gltf,
+		                          name: String,
+		                          geo: &MeshGeo|
+		 -> gltf::MeshIndex {
+			for prim in &mut prims {
+				prim.clear()
+			}
+			colour_prim.clear();
+			translucent_prim.clear();
+			lines_prim.clear();
+			shiny_prim.clear();
+
+			for tri in &geo.tris {
+				let indices @ [i1, i2, i3] = tri.indices.map(|n| n as usize);
+
+				let flags = tri.flags;
+
+				if flags & TRIFLAG_HIDDEN != 0 {
+					continue;
+				}
+				// filter degenerates
+				let degen = match (i1 == i2, i1 == i3, i2 == i3) {
+					(false, false, false) => false,
+					(true, true, true) => continue,
+					(_, _, _) if flags & TRIFLAG_DRAW_OUTLINE == 0 => continue, // no outlines
+					// outlines on lines are ok
+					(false, _, _) if flags & TRIFLAG_OUTLINE_12 != 0 => true,
+					(_, false, _) if flags & TRIFLAG_OUTLINE_13 != 0 => true,
+					(_, _, false) if flags & TRIFLAG_OUTLINE_23 != 0 => true,
+					_ => continue,
+				};
+
+				let [p1, p2, p3] = indices.map(|i| geo.verts[i]);
+
+				// outlines
+				if flags & TRIFLAG_OUTLINE_MASK > TRIFLAG_DRAW_OUTLINE {
+					// if outline flag and at least one side is set
+
+					if lines_prim.material.is_none() {
+						if translucent_mat.is_none() {
+							translucent_mat =
+								Some(gltf.create_translucent_material("Translucent".to_owned()));
+						}
+						lines_prim.material = translucent_mat;
+					}
+
+					let colour: [u8; 4] = if tri.material_index < -1023 {
+						translucent_colours[(-1024 - tri.material_index) as usize]
+					} else {
+						let index = if (-255..0).contains(&tri.material_index) {
+							-tri.material_index as usize
+						} else {
+							1
+						};
+						let rgb = &palette[index * 3..index * 3 + 3];
+						[rgb[0], rgb[1], rgb[2], 255]
+					};
+
+					let i1 = lines_prim.verts.len() as u16;
+					if flags & (TRIFLAG_OUTLINE_12 | TRIFLAG_OUTLINE_13) != 0 {
+						lines_prim.verts.push(p1);
+						lines_prim.colours.push(colour);
+					}
+					let i2 = lines_prim.verts.len() as u16;
+					if flags & (TRIFLAG_OUTLINE_12 | TRIFLAG_OUTLINE_23) != 0 {
+						lines_prim.verts.push(p2);
+						lines_prim.colours.push(colour);
+					}
+					let i3 = lines_prim.verts.len() as u16;
+					if flags & (TRIFLAG_OUTLINE_13 | TRIFLAG_OUTLINE_23) != 0 {
+						lines_prim.verts.push(p3);
+						lines_prim.colours.push(colour);
+					}
+					if flags & TRIFLAG_OUTLINE_12 != 0 {
+						lines_prim.indices.extend([i1, i2]);
+					}
+					if flags & TRIFLAG_OUTLINE_13 != 0 {
+						lines_prim.indices.extend([i1, i3]);
+					}
+					if flags & TRIFLAG_OUTLINE_23 != 0 {
+						lines_prim.indices.extend([i2, i3]);
+					}
+				} // end outlines
+
+				if degen {
+					continue;
+				}
+
+				// try textured
+				let mut tri_mat = tri.material_index;
+				if tri_mat >= 0 {
+					let mat = &mut materials[tri_mat as usize];
+					match &mat.0 {
+						TextureResult::None => tri_mat = -0xFF, // todo check in-game missing texture
+						TextureResult::Pen(pen) => tri_mat = -*pen as i16, // todo check off by one
+						TextureResult::SaveRef { width, height, .. }
+						| TextureResult::SaveEmbed(Texture { width, height, .. }) => {
+							let prim = &mut prims[tri_mat as usize];
+							if prim.material.is_none() {
+								// init prim
+								if mat.1.is_none() {
+									// create material
+									let material_name = self.materials[tri_mat as usize].to_owned();
+									match &mat.0 {
+										TextureResult::SaveRef { path, .. } => {
+											mat.1 = Some(gltf.create_texture_material_ref(
+												material_name,
+												path.clone(),
+											));
+										}
+										TextureResult::SaveEmbed(tex) => {
+											mat.1 = Some(gltf.create_texture_material_embedded(
+												material_name,
+												&tex.create_png(Some(palette)),
+											));
+										}
+										_ => unreachable!(),
+									}
+								}
+								prim.uv_scale = [(*width as f32).recip(), (*height as f32).recip()];
+								prim.material = mat.1;
+							}
+
+							// add data to textured prim
+
+							let i1 = prim.verts.len() as u16;
+							prim.verts.extend([p1, p2, p3]);
+							for [u, v] in tri.uvs {
+								prim.uvs.push([u * prim.uv_scale[0], v * prim.uv_scale[1]]);
+							}
+							prim.indices.extend([i1, i1 + 2, i1 + 1]); // swizzle indices
+
+							continue;
+						}
+					}
+				}
+
+				// not textured
+				let prim: &mut MeshPrimitive;
+				let mut colour: Option<u8> = None;
+				let mut translucent_colour: Option<u8> = None;
+				match tri_mat {
+					0.. => unreachable!(),
+					-255..=-1 => {
+						// coloured
+						prim = &mut colour_prim;
+						if prim.material.is_none() {
+							if colour_mat.is_none() {
+								colour_mat = Some(
+									gltf.create_colour_material("Colour".to_owned(), [1.0; 4]),
+								);
+							}
+							prim.material = colour_mat;
+						}
+						colour = Some(-tri_mat as u8);
+					}
+					-1010..=-990 => {
+						// shiny
+						prim = &mut shiny_prim;
+						if prim.material.is_none() {
+							if shiny_mat.is_none() {
+								shiny_mat = Some(gltf.create_shiny_material("Shiny".to_owned()));
+							}
+							prim.material = shiny_mat;
+						}
+					}
+					-1027..=-1024 => {
+						// translucent
+						prim = &mut translucent_prim;
+						if prim.material.is_none() {
+							if translucent_mat.is_none() {
+								translucent_mat = Some(
+									gltf.create_translucent_material("Translucent".to_owned()),
+								);
+							}
+							prim.material = translucent_mat;
+						}
+						translucent_colour = Some((-1024 - tri_mat) as u8); // todo check
+					}
+					..=-1028 => {
+						// other translucent?
+						// todo check
+						continue;
+					}
+					_ => {
+						// fallback?
+						// todo
+						continue;
+					}
+				};
+
+				let i1 = prim.verts.len() as u16;
+				prim.verts.extend([p1, p2, p3]);
+				prim.indices.extend([i1, i1 + 2, i1 + 1]); // swizzle indices
+				if let Some(colour_index) = colour {
+					let colour_index = colour_index as usize;
+					let colour: [u8; 3] = palette[colour_index * 3..colour_index * 3 + 3]
+						.try_into()
+						.unwrap();
+					let colour = [colour[0], colour[1], colour[2], 255];
+					prim.colours.extend([colour, colour, colour]);
+				} else if let Some(translucent_index) = translucent_colour {
+					let colour = translucent_colours[translucent_index as usize];
+					prim.colours.extend([colour, colour, colour]);
+				}
+			}
+
+			// finished populating primitives, create mesh
+
+			let mesh = gltf.create_mesh(name);
+			for prim in
+				prims
+					.iter()
+					.chain([&colour_prim, &translucent_prim, &shiny_prim, &lines_prim])
+			{
+				if prim.material.is_none() {
+					continue;
+				}
+				assert!(!prim.verts.is_empty());
+
+				let prim_id =
+					gltf.add_mesh_primitive(mesh, &prim.verts, &prim.indices, prim.material);
+				// these are no-ops if unused
+				gltf.add_primitive_uvs(prim_id, &prim.uvs);
+				gltf.add_primitive_colours(prim_id, &prim.colours);
+
+				if std::ptr::eq(prim, &lines_prim) {
+					gltf.set_primitive_mode(prim_id, gltf::PrimitiveMode::Lines);
+				}
+			}
+
+			mesh
+		};
+
+		let target = target.unwrap_or_else(|| gltf.create_node(name.to_owned(), None));
+		match &self.mesh_data {
+			MeshType::Single(geo) => {
+				let submesh = create_submesh(gltf, name.to_owned(), geo);
+				gltf.set_node_mesh(target, submesh);
+			}
+			MeshType::Multimesh { submeshes, .. } => {
+				for sub in submeshes {
+					let submesh = create_submesh(gltf, sub.name.to_owned(), &sub.mesh_data);
+					let sub_node =
+						gltf.create_child_node(target, sub.name.to_owned(), Some(submesh));
+					gltf.set_node_position(sub_node, sub.origin);
+				}
+			}
+		}
+
+		if !self.reference_points.is_empty() {
+			gltf.create_points_nodes(
+				"Reference Points".into(),
+				&self.reference_points,
+				Some(target),
+			);
+		}
+
+		target
+	}
+
+	pub fn get_used_colours(&self, textures: &impl TextureHolder<'a>) -> ColourMap {
+		let mut result = ColourMap::new();
+		for mat in &self.materials {
+			textures.get_used_colours(mat, &mut result);
 		}
 		match &self.mesh_data {
 			MeshType::Single(geo) => geo.get_used_colours(&mut result),
@@ -237,8 +541,8 @@ impl<'a> Mesh<'a> {
 	}
 }
 
-pub trait TextureHolder {
-	fn lookup(&mut self, name: &str) -> TextureResult;
+pub trait TextureHolder<'a> {
+	fn lookup(&mut self, name: &str) -> TextureResult<'a>;
 	fn get_used_colours(&self, name: &str, colours: &mut ColourMap);
 	fn get_palette(&self) -> &[u8];
 	fn get_transparent_colours(&self) -> [[u8; 4]; 4];
@@ -250,11 +554,7 @@ pub enum TextureResult<'a> {
 	SaveRef {
 		width: u16,
 		height: u16,
-		path: &'a str,
+		path: String,
 	},
-	SaveInline {
-		width: u16,
-		height: u16,
-		pixels: &'a [u8],
-	},
+	SaveEmbed(Texture<'a>),
 }

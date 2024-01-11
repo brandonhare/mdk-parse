@@ -27,6 +27,8 @@ struct Primitive {
 	attributes: Attributes,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	material: Option<MaterialIndex>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	mode: Option<PrimitiveMode>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "UPPERCASE")]
@@ -34,6 +36,25 @@ struct Attributes {
 	position: AccessorIndex,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	texcoord_0: Option<AccessorIndex>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	color_0: Option<AccessorIndex>,
+}
+
+#[derive(Serialize, Clone, Copy, Eq, PartialEq)]
+#[serde(into = "usize")]
+pub enum PrimitiveMode {
+	Points = 0,
+	Lines = 1,
+	LineLoop = 2,
+	LineStrip = 3,
+	Triangles = 4,
+	TriangleStrip = 5,
+	TriangleFan = 6,
+}
+impl From<PrimitiveMode> for usize {
+	fn from(value: PrimitiveMode) -> Self {
+		value as usize
+	}
 }
 
 #[derive(Serialize)]
@@ -41,12 +62,22 @@ struct Attributes {
 struct Material {
 	name: String,
 	pbr_metallic_roughness: PbrMetallicRoughness,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	alpha_mode: Option<AlphaMode>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 enum PbrMetallicRoughness {
 	BaseColorTexture(TextureInfo),
 	BaseColorFactor([f32; 4]),
+	RoughnessFactor(f32),
+}
+#[derive(Serialize)]
+#[serde(rename_all = "UPPERCASE")]
+enum AlphaMode {
+	Opaque,
+	Mask,
+	Blend,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -69,44 +100,125 @@ struct Image {
 	name: String,
 }
 
-#[allow(unused)]
-const FILTER_NEAREST: isize = 9728;
-#[allow(unused)]
-const FILTER_LINEAR: isize = 9729;
-#[allow(unused)]
-const WRAP_CLAMP: isize = 33071;
-#[allow(unused)]
-const WRAP_REPEAT: isize = 10497;
+#[derive(Serialize, Default, Clone)]
+#[serde(into = "usize")]
+enum FilterType {
+	#[default]
+	Linear = 9729,
+	Nearest = 9728,
+}
+impl From<FilterType> for usize {
+	fn from(value: FilterType) -> usize {
+		value as usize
+	}
+}
+#[derive(Serialize, Default, Clone)]
+#[serde(into = "usize")]
+enum WrapType {
+	#[default]
+	Repeat = 10497,
+	Clamp = 33071,
+}
+impl From<WrapType> for usize {
+	fn from(value: WrapType) -> usize {
+		value as usize
+	}
+}
 
-#[derive(Serialize)]
+#[derive(Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Sampler {
-	mag_filter: isize,
-	min_filter: isize,
-	wrap_s: isize,
-	wrap_t: isize,
-}
-impl Default for Sampler {
-	fn default() -> Self {
-		Self {
-			mag_filter: FILTER_LINEAR,
-			min_filter: FILTER_LINEAR,
-			wrap_s: WRAP_REPEAT,
-			wrap_t: WRAP_REPEAT,
-		}
-	}
+	mag_filter: FilterType,
+	min_filter: FilterType,
+	wrap_s: WrapType,
+	wrap_t: WrapType,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Accessor {
 	buffer_view: BufferViewIndex,
-	component_type: usize,
+	component_type: AccessorComponentType,
+	#[serde(skip_serializing_if = "is_false")]
+	normalized: bool,
 	count: usize,
 	#[serde(rename = "type")]
-	element_type: &'static str,
-	min: Vec<f64>,
-	max: Vec<f64>,
+	element_type: AccessorType,
+	#[serde(skip_serializing_if = "AccessorMinMaxValue::is_none")]
+	min: AccessorMinMaxValue,
+	#[serde(skip_serializing_if = "AccessorMinMaxValue::is_none")]
+	max: AccessorMinMaxValue,
+}
+fn is_false(value: &bool) -> bool {
+	!value
+}
+
+#[derive(Serialize, Clone)]
+#[serde(into = "usize")]
+pub enum AccessorComponentType {
+	SignedByte = 5120,
+	UnsignedByte = 5121,
+	SignedShort = 5122,
+	UnsignedShort = 5123,
+	UnsignedInt = 5125,
+	Float = 5126,
+}
+impl From<AccessorComponentType> for usize {
+	fn from(value: AccessorComponentType) -> Self {
+		value as usize
+	}
+}
+#[derive(Serialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum AccessorType {
+	Scalar,
+	Vec2,
+	Vec3,
+	Vec4,
+	Mat2,
+	Mat3,
+	Mat4,
+}
+
+#[derive(Serialize, Default, Clone, Copy)]
+#[serde(untagged)]
+pub enum AccessorMinMaxValue {
+	#[default]
+	None,
+	Scalar([f64; 1]),
+	Vec2([f64; 2]),
+	Vec3([f64; 3]),
+	Vec4([f64; 4]),
+}
+impl AccessorMinMaxValue {
+	fn is_none(&self) -> bool {
+		matches!(self, Self::None)
+	}
+}
+impl std::ops::Deref for AccessorMinMaxValue {
+	type Target = [f64];
+	fn deref(&self) -> &Self::Target {
+		use AccessorMinMaxValue as AV;
+		match self {
+			AV::None => &[],
+			AV::Scalar(values) => values.as_slice(),
+			AV::Vec2(values) => values.as_slice(),
+			AV::Vec3(values) => values.as_slice(),
+			AV::Vec4(values) => values.as_slice(),
+		}
+	}
+}
+impl std::ops::DerefMut for AccessorMinMaxValue {
+	fn deref_mut(&mut self) -> &mut Self::Target {
+		use AccessorMinMaxValue as AV;
+		match self {
+			AV::None => &mut [],
+			AV::Scalar(values) => values.as_mut_slice(),
+			AV::Vec2(values) => values.as_mut_slice(),
+			AV::Vec3(values) => values.as_mut_slice(),
+			AV::Vec4(values) => values.as_mut_slice(),
+		}
+	}
 }
 
 #[derive(Default, Serialize)]
@@ -208,6 +320,8 @@ pub struct NodeIndex(usize);
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 pub struct MeshIndex(usize);
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
+pub struct PrimitiveIndex(MeshIndex, usize);
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 pub struct MaterialIndex(usize);
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 struct BufferIndex(usize);
@@ -288,6 +402,26 @@ impl Gltf {
 		self.materials.push(Material {
 			name,
 			pbr_metallic_roughness: PbrMetallicRoughness::BaseColorFactor(colour),
+			alpha_mode: None,
+		});
+		MaterialIndex(self.materials.len() - 1)
+	}
+
+	#[must_use]
+	pub fn create_translucent_material(&mut self, name: String) -> MaterialIndex {
+		self.materials.push(Material {
+			name,
+			pbr_metallic_roughness: PbrMetallicRoughness::BaseColorFactor([1.0; 4]),
+			alpha_mode: Some(AlphaMode::Blend),
+		});
+		MaterialIndex(self.materials.len() - 1)
+	}
+	#[must_use]
+	pub fn create_shiny_material(&mut self, name: String) -> MaterialIndex {
+		self.materials.push(Material {
+			name,
+			pbr_metallic_roughness: PbrMetallicRoughness::RoughnessFactor(0.0),
+			alpha_mode: None,
 		});
 		MaterialIndex(self.materials.len() - 1)
 	}
@@ -318,8 +452,14 @@ impl Gltf {
 			pbr_metallic_roughness: PbrMetallicRoughness::BaseColorTexture(TextureInfo {
 				index: texture_index,
 			}),
+			alpha_mode: None,
 		});
 		material_index
+	}
+
+	#[must_use]
+	pub fn create_texture_material_embedded(&mut self, name: String, data: &[u8]) -> MaterialIndex {
+		self.create_texture_material_ref(name, to_uri(data))
 	}
 
 	#[must_use]
@@ -389,7 +529,10 @@ impl Gltf {
 		&mut self, data: &[T], target: PrimitiveTarget,
 	) -> AccessorIndex {
 		if matches!(target, PrimitiveTarget::Indices) {
-			assert!(T::NUM_COMPONENTS == 1, "indices must be flat!");
+			assert!(
+				matches!(T::ACCESSOR_TYPE, AccessorType::Scalar),
+				"indices must be flat!"
+			);
 		}
 
 		let data_u8 = BufferData::to_u8(data);
@@ -413,12 +556,17 @@ impl Gltf {
 			target,
 		});
 
-		let (min, max) = T::to_minmax(data);
+		let (min, max) = if matches!(T::ACCESSOR_TYPE, AccessorType::Scalar) {
+			Default::default()
+		} else {
+			T::to_minmax(data)
+		};
 
 		let accessor_index = AccessorIndex(self.accessors.len());
 		self.accessors.push(Accessor {
 			buffer_view: view_index,
 			component_type: T::COMPONENT_TYPE,
+			normalized: T::NORMALIZED,
 			count: data.len(),
 			element_type: T::ACCESSOR_TYPE,
 			min,
@@ -428,32 +576,49 @@ impl Gltf {
 		accessor_index
 	}
 
-	fn add_positions(&mut self, data: &[Vec3]) -> AccessorIndex {
-		self.add_primitive_data(data, PrimitiveTarget::Vertices)
-	}
-	fn add_uvs(&mut self, data: &[[f32; 2]]) -> AccessorIndex {
-		self.add_primitive_data(data, PrimitiveTarget::Vertices)
-	}
-	fn add_indices(&mut self, data: &[u16]) -> AccessorIndex {
-		self.add_primitive_data(data, PrimitiveTarget::Indices)
-	}
-
 	pub fn add_mesh_primitive(
-		&mut self, mesh: MeshIndex, positions: &[Vec3], indices: &[u16], uvs: Option<&[Vec2]>,
+		&mut self, mesh: MeshIndex, positions: &[Vec3], indices: &[u16],
 		material: Option<MaterialIndex>,
-	) {
-		let position = self.add_positions(positions);
-		let indices = self.add_indices(indices);
-		let texcoord_0 = material.and_then(|_| uvs.map(|uvs| self.add_uvs(uvs)));
+	) -> PrimitiveIndex {
+		let position = self.add_primitive_data(positions, PrimitiveTarget::Vertices);
+		let indices = self.add_primitive_data(indices, PrimitiveTarget::Indices);
 
-		self.meshes[mesh.0].primitives.push(Primitive {
+		let primitives = &mut self.meshes[mesh.0].primitives;
+		let primitive_index = primitives.len();
+		primitives.push(Primitive {
 			attributes: Attributes {
 				position,
-				texcoord_0,
+				texcoord_0: None,
+				color_0: None,
 			},
 			indices,
 			material,
+			mode: None,
 		});
+
+		PrimitiveIndex(mesh, primitive_index)
+	}
+	pub fn set_primitive_mode(&mut self, primitive: PrimitiveIndex, mode: PrimitiveMode) {
+		self.meshes[primitive.0 .0].primitives[primitive.1].mode = Some(mode);
+	}
+
+	pub fn add_primitive_uvs(&mut self, primitive: PrimitiveIndex, uvs: &[Vec2]) {
+		if uvs.is_empty() {
+			return;
+		}
+		let uvs = self.add_primitive_data(uvs, PrimitiveTarget::Vertices);
+		self.meshes[primitive.0 .0].primitives[primitive.1]
+			.attributes
+			.texcoord_0 = Some(uvs);
+	}
+	pub fn add_primitive_colours(&mut self, primitive: PrimitiveIndex, colours: &[[u8; 4]]) {
+		if colours.is_empty() {
+			return;
+		}
+		let colours = self.add_primitive_data(colours, PrimitiveTarget::Vertices);
+		self.meshes[primitive.0 .0].primitives[primitive.1]
+			.attributes
+			.color_0 = Some(colours);
 	}
 
 	pub fn create_mesh_from_primitive(
@@ -461,7 +626,10 @@ impl Gltf {
 		material: Option<MaterialIndex>,
 	) -> MeshIndex {
 		let mesh = self.create_mesh(name);
-		self.add_mesh_primitive(mesh, positions, indices, uvs, material);
+		let prim = self.add_mesh_primitive(mesh, positions, indices, material);
+		if let Some(uvs) = uvs {
+			self.add_primitive_uvs(prim, uvs);
+		}
 		mesh
 	}
 
@@ -615,228 +783,156 @@ fn to_uri(data: &[u8]) -> String {
 }
 
 pub trait BufferData: Sized + Copy + PartialOrd + std::fmt::Debug {
-	const COMPONENT_TYPE: usize;
-	const ACCESSOR_TYPE: &'static str = "SCALAR";
-	const NUM_COMPONENTS: usize = 1;
+	const COMPONENT_TYPE: AccessorComponentType;
+	const ACCESSOR_TYPE: AccessorType = AccessorType::Scalar;
+	const NORMALIZED: bool = false;
+
+	type InnerType: Copy + Into<f64>;
 
 	fn to_u8(arr: &[Self]) -> &[u8] {
 		unsafe { std::slice::from_raw_parts(arr.as_ptr() as *const u8, std::mem::size_of_val(arr)) }
 	}
 
-	type InnerType: Copy + Into<f64>;
 	fn to_array(&self) -> &[Self::InnerType];
 
-	fn to_minmax(arr: &[Self]) -> (Vec<f64>, Vec<f64>) {
-		let mut min = arr[0];
-		let mut max = arr[0];
-
-		for next in arr.iter().skip(1) {
-			min = min.minmax1(next).0;
-			max = max.minmax1(next).1;
+	fn to_minmax_value(&self) -> AccessorMinMaxValue {
+		fn value<T: Copy + Into<f64>, const N: usize>(arr: &[T]) -> [f64; N] {
+			assert_eq!(arr.len(), N);
+			std::array::from_fn(|i| arr[i].into())
 		}
-
-		let result: (Vec<f64>, Vec<f64>) = (
-			min.to_array().iter().copied().map(Into::into).collect(),
-			max.to_array().iter().copied().map(Into::into).collect(),
-		);
-
-		result
+		let arr = self.to_array();
+		match Self::ACCESSOR_TYPE {
+			AccessorType::Scalar => AccessorMinMaxValue::Scalar(value(arr)),
+			AccessorType::Vec2 => AccessorMinMaxValue::Vec2(value(arr)),
+			AccessorType::Vec3 => AccessorMinMaxValue::Vec3(value(arr)),
+			AccessorType::Vec4 => AccessorMinMaxValue::Vec4(value(arr)),
+			_ => AccessorMinMaxValue::None,
+		}
 	}
 
-	fn minmax1(&self, rhs: &Self) -> (Self, Self) {
-		if self < rhs {
-			(*self, *rhs)
-		} else {
-			(*rhs, *self)
+	fn to_minmax(arr: &[Self]) -> (AccessorMinMaxValue, AccessorMinMaxValue) {
+		use AccessorMinMaxValue as AV;
+		let Some((first, rest)) = arr.split_first() else {
+			return (AV::None, AV::None);
+		};
+
+		let first = first.to_minmax_value();
+		if first.is_none() {
+			return (first, first);
 		}
+
+		rest.iter()
+			.fold((first, first), |(mut min, mut max), value| {
+				let value = value.to_minmax_value();
+				debug_assert_eq!(min.len(), value.len());
+				for ((min, max), value) in min.iter_mut().zip(max.iter_mut()).zip(value.iter()) {
+					if value < min {
+						*min = *value;
+					}
+					if value > max {
+						*max = *value;
+					}
+				}
+				(min, max)
+			})
 	}
 }
 impl BufferData for i8 {
-	const COMPONENT_TYPE: usize = 5120;
+	const COMPONENT_TYPE: AccessorComponentType = AccessorComponentType::SignedByte;
+	const NORMALIZED: bool = true;
 	type InnerType = Self;
 	fn to_array(&self) -> &[Self] {
 		std::slice::from_ref(self)
 	}
 }
 impl BufferData for u8 {
-	const COMPONENT_TYPE: usize = 5121;
+	const COMPONENT_TYPE: AccessorComponentType = AccessorComponentType::UnsignedByte;
+	const NORMALIZED: bool = true;
 	type InnerType = Self;
 	fn to_array(&self) -> &[Self] {
 		std::slice::from_ref(self)
 	}
 }
 impl BufferData for i16 {
-	const COMPONENT_TYPE: usize = 5122;
+	const COMPONENT_TYPE: AccessorComponentType = AccessorComponentType::SignedShort;
 	type InnerType = Self;
 	fn to_array(&self) -> &[Self] {
 		std::slice::from_ref(self)
 	}
 }
 impl BufferData for u16 {
-	const COMPONENT_TYPE: usize = 5123;
+	const COMPONENT_TYPE: AccessorComponentType = AccessorComponentType::UnsignedShort;
 	type InnerType = Self;
 	fn to_array(&self) -> &[Self] {
 		std::slice::from_ref(self)
 	}
 }
 impl BufferData for u32 {
-	const COMPONENT_TYPE: usize = 5125;
+	const COMPONENT_TYPE: AccessorComponentType = AccessorComponentType::UnsignedInt;
 	type InnerType = Self;
 	fn to_array(&self) -> &[Self] {
 		std::slice::from_ref(self)
 	}
 }
 impl BufferData for f32 {
-	const COMPONENT_TYPE: usize = 5126;
+	const COMPONENT_TYPE: AccessorComponentType = AccessorComponentType::Float;
 	type InnerType = Self;
 	fn to_array(&self) -> &[Self] {
 		std::slice::from_ref(self)
 	}
 }
 
-fn minmax_arr<T: Copy, const N: usize>(
-	arr1: &[T; N], arr2: &[T; N], func: impl Fn(&T, &T) -> (T, T),
-) -> ([T; N], [T; N]) {
-	let mut mins = *arr1;
-	let mut maxs = *arr1;
-
-	for i in 0..N {
-		(mins[i], maxs[i]) = func(&arr1[i], &arr2[i]);
-	}
-
-	(mins, maxs)
-}
-
 impl<T: BufferData + Into<f64>> BufferData for [T; 2] {
-	const COMPONENT_TYPE: usize = T::COMPONENT_TYPE;
-	const ACCESSOR_TYPE: &'static str = "VEC2";
-	const NUM_COMPONENTS: usize = 2;
-
+	const COMPONENT_TYPE: AccessorComponentType = T::COMPONENT_TYPE;
+	const NORMALIZED: bool = T::NORMALIZED;
+	const ACCESSOR_TYPE: AccessorType = AccessorType::Vec2;
 	type InnerType = T;
 	fn to_array(&self) -> &[T] {
 		self
-	}
-
-	fn minmax1(&self, rhs: &Self) -> (Self, Self) {
-		minmax_arr(self, rhs, T::minmax1)
 	}
 }
 impl<T: BufferData + Into<f64>> BufferData for [T; 3] {
-	const COMPONENT_TYPE: usize = T::COMPONENT_TYPE;
-	const ACCESSOR_TYPE: &'static str = "VEC3";
-	const NUM_COMPONENTS: usize = 3;
+	const COMPONENT_TYPE: AccessorComponentType = T::COMPONENT_TYPE;
+	const NORMALIZED: bool = T::NORMALIZED;
+	const ACCESSOR_TYPE: AccessorType = AccessorType::Vec3;
 	type InnerType = T;
 	fn to_array(&self) -> &[T] {
 		self
-	}
-
-	fn minmax1(&self, rhs: &Self) -> (Self, Self) {
-		minmax_arr(self, rhs, T::minmax1)
 	}
 }
 impl<T: BufferData + Into<f64>> BufferData for [T; 4] {
-	const COMPONENT_TYPE: usize = T::COMPONENT_TYPE;
-	const ACCESSOR_TYPE: &'static str = "VEC4";
-	const NUM_COMPONENTS: usize = 4;
+	const COMPONENT_TYPE: AccessorComponentType = T::COMPONENT_TYPE;
+	const NORMALIZED: bool = T::NORMALIZED;
+	const ACCESSOR_TYPE: AccessorType = AccessorType::Vec4;
 	type InnerType = T;
 	fn to_array(&self) -> &[T] {
 		self
-	}
-
-	fn minmax1(&self, rhs: &Self) -> (Self, Self) {
-		minmax_arr(self, rhs, T::minmax1)
 	}
 }
 impl<T: BufferData + Into<f64>> BufferData for [T; 3 * 3] {
-	const COMPONENT_TYPE: usize = T::COMPONENT_TYPE;
-	const ACCESSOR_TYPE: &'static str = "MAT3";
-	const NUM_COMPONENTS: usize = 3 * 3;
+	const COMPONENT_TYPE: AccessorComponentType = T::COMPONENT_TYPE;
+	const NORMALIZED: bool = T::NORMALIZED;
+	const ACCESSOR_TYPE: AccessorType = AccessorType::Mat3;
 	type InnerType = T;
 	fn to_array(&self) -> &[T] {
 		self
-	}
-
-	fn minmax1(&self, rhs: &Self) -> (Self, Self) {
-		minmax_arr(self, rhs, T::minmax1)
 	}
 }
 impl<T: BufferData + Into<f64>> BufferData for [T; 4 * 4] {
-	const COMPONENT_TYPE: usize = T::COMPONENT_TYPE;
-	const ACCESSOR_TYPE: &'static str = "MAT4";
-	const NUM_COMPONENTS: usize = 4 * 4;
+	const COMPONENT_TYPE: AccessorComponentType = T::COMPONENT_TYPE;
+	const NORMALIZED: bool = T::NORMALIZED;
+	const ACCESSOR_TYPE: AccessorType = AccessorType::Mat4;
 	type InnerType = T;
 	fn to_array(&self) -> &[T] {
 		self
-	}
-
-	fn minmax1(&self, rhs: &Self) -> (Self, Self) {
-		minmax_arr(self, rhs, T::minmax1)
 	}
 }
 
 impl BufferData for Vec3 {
-	const COMPONENT_TYPE: usize = <[f32; 3] as BufferData>::COMPONENT_TYPE;
-	const ACCESSOR_TYPE: &'static str = <[f32; 3] as BufferData>::ACCESSOR_TYPE;
-	const NUM_COMPONENTS: usize = <[f32; 3] as BufferData>::NUM_COMPONENTS;
-	type InnerType = <[f32; 3] as BufferData>::InnerType;
-
+	const COMPONENT_TYPE: AccessorComponentType = AccessorComponentType::Float;
+	const ACCESSOR_TYPE: AccessorType = AccessorType::Vec3;
+	type InnerType = f32;
 	fn to_array(&self) -> &[Self::InnerType] {
 		self.as_slice()
-	}
-	fn minmax1(&self, rhs: &Self) -> (Self, Self) {
-		let (lhs, rhs) = <[f32; 3] as BufferData>::minmax1(self, rhs);
-		(lhs.into(), rhs.into())
-	}
-}
-
-#[cfg(test)]
-mod tests {
-	use super::*;
-	#[test]
-	fn test_minmax_arr() {
-		fn test(a1: [i16; 3], a2: [i16; 3]) {
-			let (min, max) = minmax_arr(&a1, &a2, BufferData::minmax1);
-			println!("{a1:?},{a2:?} -> {min:?},{max:?}");
-			for i in 0..3 {
-				assert!(min[i] <= max[i]);
-
-				assert!(min[i] <= a1[i]);
-				assert!(min[i] <= a2[i]);
-				assert!(max[i] >= a1[i]);
-				assert!(max[i] >= a2[i]);
-
-				assert!(min[i] == a1[i] || min[i] == a2[i]);
-				assert!(max[i] == a1[i] || max[i] == a2[i]);
-			}
-		}
-
-		for a in [-10, -5, 0, 5, 10i16] {
-			for b in [-14, -7, 0, 7, 14] {
-				let (min, max) = BufferData::minmax1(&a, &b);
-				assert!(min <= max);
-				assert!(min <= a);
-				assert!(min <= b);
-				assert!(max >= a);
-				assert!(max >= b);
-			}
-		}
-
-		for a in [-10, -5, 0, 5, 10] {
-			for b in [-14, -7, 0, 7, 14] {
-				for c in [-9, -3, 0, 3, 9] {
-					let arr1 = [a, b, c];
-
-					for a in [-10, -5, 0, 5, 10] {
-						for b in [-14, -7, 0, 7, 14] {
-							for c in [-9, -3, 0, 3, 9] {
-								let arr2 = [a, b, c];
-
-								test(arr1, arr2);
-							}
-						}
-					}
-				}
-			}
-		}
 	}
 }

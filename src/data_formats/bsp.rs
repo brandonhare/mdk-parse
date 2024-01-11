@@ -1,5 +1,5 @@
-use crate::data_formats::mesh::{Mesh, MeshGeo, MeshTri, MeshType, TextureHolder};
-use crate::{gltf, OutputWriter, Reader, Vec3};
+use crate::data_formats::mesh::{Mesh, MeshGeo, MeshTri, MeshType};
+use crate::{OutputWriter, Reader, Vec3};
 
 pub struct BspPlane {
 	pub normal: Vec3,
@@ -78,9 +78,7 @@ impl<'a> Bsp<'a> {
 		}
 	}
 
-	pub fn save_as(
-		&self, name: &str, output: &mut OutputWriter, textures: Option<&dyn TextureHolder>,
-	) {
-		self.mesh.save_as(name, output, textures)
+	pub fn save_as(&self, name: &str, output: &mut OutputWriter) {
+		self.mesh.save_as(name, output)
 	}
 }

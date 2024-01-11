@@ -26,6 +26,11 @@ impl<'a> Texture<'a> {
 		}
 	}
 
+	pub fn create_png(&self, palette: Option<&[u8]>) -> Vec<u8> {
+		let _ = palette;
+		todo!()
+	}
+
 	pub fn save_as(&self, name: &str, output: &mut OutputWriter, palette: Option<&[u8]>) {
 		output.write_png(
 			name,

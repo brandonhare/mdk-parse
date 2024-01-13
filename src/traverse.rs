@@ -400,7 +400,7 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 					debug_assert!(self.palette.len() == 256 * 3);
 					self.palette
 				}
-				fn get_transparent_colours(&self) -> [[u8; 4]; 4] {
+				fn get_translucent_colours(&self) -> [[u8; 4]; 4] {
 					self.translucent_colours
 				}
 			}

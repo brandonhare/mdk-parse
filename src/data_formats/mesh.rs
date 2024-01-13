@@ -231,7 +231,7 @@ impl<'a> Mesh<'a> {
 			.collect();
 
 		let palette = textures.get_palette();
-		let translucent_colours = textures.get_transparent_colours();
+		let mut translucent_colours: Option<[[u8; 4]; 4]> = None;
 
 		let mut colour_mat: Option<gltf::MaterialIndex> = None;
 		let mut translucent_mat: Option<gltf::MaterialIndex> = None;
@@ -313,7 +313,8 @@ impl<'a> Mesh<'a> {
 					}
 
 					let colour: [u8; 4] = if let Pen::Translucent(index) = tri_mat {
-						translucent_colours[index as usize]
+						translucent_colours
+							.get_or_insert_with(|| textures.get_translucent_colours())[index as usize]
 					} else {
 						// fallback (unused)
 						//eprintln!("unexpected material {tri_mat:?} on mesh {name} outline");
@@ -445,7 +446,11 @@ impl<'a> Mesh<'a> {
 							}
 							prim.material = translucent_mat;
 						}
-						colour = Some(translucent_colours[translucent_index as usize]);
+						colour = Some(
+							translucent_colours
+								.get_or_insert_with(|| textures.get_translucent_colours())
+								[translucent_index as usize],
+						);
 					}
 					Pen::Texture(_) => unreachable!(),
 					Pen::Unknown(_n) => {
@@ -538,7 +543,7 @@ pub trait TextureHolder<'a> {
 	fn lookup(&mut self, name: &str) -> TextureResult<'a>;
 	fn get_used_colours(&self, name: &str, colours: &mut ColourMap);
 	fn get_palette(&self) -> &[u8];
-	fn get_transparent_colours(&self) -> [[u8; 4]; 4];
+	fn get_translucent_colours(&self) -> [[u8; 4]; 4];
 }
 
 pub enum TextureResult<'a> {

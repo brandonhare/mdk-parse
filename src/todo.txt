@@ -12,3 +12,4 @@ masked mesh textures
 some wrong colours
 shiny types?
 find unknown mesh material -1028
+replace mesh texture finder thing

@@ -7,6 +7,7 @@ mod file_formats;
 mod gltf;
 mod output_writer;
 mod reader;
+mod stream;
 mod traverse;
 mod vectors;
 use data_formats::image_formats;
@@ -192,6 +193,7 @@ fn main() {
 	let save_sounds = true;
 	let save_textures = true;
 	let save_meshes = true;
+	stream::parse_stream(save_sounds, save_textures, save_meshes);
 	traverse::parse_traverse(save_sounds, save_textures, save_meshes);
 
 	//for_all_ext("assets", "dti", parse_dti);

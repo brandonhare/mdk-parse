@@ -156,8 +156,10 @@ impl<'a> Mto<'a> {
 
 			// todo write full palette
 
-			let mut materials_output = output.push_dir("materials");
-			arena.mti.save(&mut materials_output, None); // todo palette
+			if !arena.mti.is_empty() {
+				let mut output = output.push_dir("materials");
+				arena.mti.save(&mut output, None); // todo palette
+			}
 		}
 	}
 }

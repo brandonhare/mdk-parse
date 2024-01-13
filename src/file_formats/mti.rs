@@ -2,9 +2,30 @@ use crate::data_formats::Texture;
 use crate::{OutputWriter, Reader};
 
 pub enum Material<'a> {
-	Pen(i32), // todo split
+	Pen(Pen),
 	Texture(Texture<'a>, MaterialFlags),
 	AnimatedTexture(Vec<Texture<'a>>, MaterialFlags),
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
+pub enum Pen {
+	Texture(u8),     // index into mesh material array
+	Colour(u8),      // index into palette
+	Translucent(u8), // index into dti translucent_colours
+	Shiny(u8),       // todo
+	Unknown(i32),    // todo
+}
+impl Pen {
+	pub fn new(index: i32) -> Pen {
+		match index {
+			0..=255 => Pen::Texture(index as u8),
+			-255..=-1 => Pen::Colour(-index as u8),
+			-1010..=-990 => Pen::Shiny((-990 - index) as u8),
+			-1027..=-1024 => Pen::Translucent((-1024 - index) as u8),
+			..=-1028 => Pen::Unknown(index), // todo
+			_ => Pen::Unknown(index),        // todo
+		}
+	}
 }
 
 pub struct MaterialFlags {
@@ -42,7 +63,12 @@ impl<'a> Mti<'a> {
 
 			if flags == 0xFFFFFFFF {
 				// pen
-				let pen_value = reader.i32();
+				let pen_value = match reader.i32() {
+					0 => Pen::Colour(0),
+					n @ 1.. => Pen::new(-n), // negate to match mesh tri values
+					n => Pen::Unknown(n),    // todo negative?
+				};
+
 				let padding1 = reader.u32(); // padding
 				let padding2 = reader.u32();
 				assert!(padding1 == 0 && padding2 == 0);
@@ -109,18 +135,22 @@ impl<'a> Mti<'a> {
 		}
 	}
 
+	pub fn is_empty(&self) -> bool {
+		self.materials.is_empty()
+	}
+
 	pub fn save(&self, output: &mut OutputWriter, palette: Option<&[u8]>) {
 		// todo more granular palette
 		use std::fmt::Write;
-		let mut pens_summary = String::from("name\tvalue\n");
-		let mut flags_summary = String::from("name\ta\tb\tflags\n");
+		let mut pens_summary = String::from("name    \tvalue\n");
+		let mut flags_summary = String::from("name    \ta    \tb  \tflags\n");
 		let mut has_pens = false;
 		let mut has_flags = false;
 		for (name, material) in &self.materials {
 			match material {
-				Material::Pen(n) => {
+				Material::Pen(pen) => {
 					has_pens = true;
-					writeln!(pens_summary, "{name}\t{n}").unwrap()
+					writeln!(pens_summary, "{name:8}\t{pen:?}").unwrap()
 				}
 				Material::Texture(texture, _) => {
 					texture.save_as(name, output, palette);
@@ -136,7 +166,7 @@ impl<'a> Mti<'a> {
 						has_flags = true;
 						writeln!(
 							flags_summary,
-							"{name}\t{}\t{}\t{}",
+							"{name:8}\t{:5}\t{:3}\t{:x}",
 							flags.a, flags.b, flags.flags
 						)
 						.unwrap();
@@ -146,10 +176,10 @@ impl<'a> Mti<'a> {
 		}
 
 		if has_pens {
-			output.write("pens", "tsv", &pens_summary);
+			output.write("pens", "txt", &pens_summary);
 		}
 		if has_flags {
-			output.write("texture_flags", "tsv", &flags_summary);
+			output.write("texture_flags", "txt", &flags_summary);
 		}
 	}
 }

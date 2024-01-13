@@ -4,7 +4,10 @@ use std::fmt::Write;
 use crate::data_formats::{
 	image_formats::ColourMap, Mesh, SoundInfo, Texture, TextureHolder, TextureResult,
 };
-use crate::file_formats::{mti::Material, Bni, Cmi, Dti, Mti, Mto, Sni};
+use crate::file_formats::{
+	mti::{Material, Mti, Pen},
+	Bni, Cmi, Dti, Mto, Sni,
+};
 use crate::{output_writer::OutputWriter, reader::Reader};
 
 fn filter_textures<'a>(
@@ -110,7 +113,7 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 
 		let mut all_sounds = HashMap::<&str, &SoundInfo>::new();
 		let mut all_meshes = HashMap::<&str, &Mesh>::new();
-		let mut all_pens = HashMap::<&str, i32>::new();
+		let mut all_pens = HashMap::<&str, Pen>::new();
 		let mut all_textures = HashMap::<&str, &[Texture]>::new();
 
 		let mut palettes = HashMap::<&str, Vec<u8>>::new();
@@ -345,7 +348,7 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 
 			struct TravTextureLookup<'a> {
 				translucent_colours: [[u8; 4]; 4],
-				pens: &'a HashMap<&'a str, i32>,
+				pens: &'a HashMap<&'a str, Pen>,
 				textures: &'a HashMap<&'a str, &'a [Texture<'a>]>,
 				texture_arenas: &'a HashMap<&'a str, Vec<(&'a str, &'a str)>>,
 				palette: &'a [u8],
@@ -389,10 +392,8 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 						for frame in *tex {
 							colours.extend(frame.pixels.iter());
 						}
-					} else if let Some(&pen) = self.pens.get(name) {
-						if pen < 256 {
-							colours.push(pen as u8);
-						}
+					} else if let Some(Pen::Colour(n)) = self.pens.get(name) {
+						colours.push(*n);
 					}
 				}
 				fn get_palette(&self) -> &[u8] {

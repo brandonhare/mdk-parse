@@ -1,4 +1,5 @@
 use crate::data_formats::{image_formats::ColourMap, Texture};
+use crate::file_formats::mti::Pen;
 use crate::{gltf, OutputWriter, Reader, Vec2, Vec3};
 
 pub struct Mesh<'a> {
@@ -297,6 +298,8 @@ impl<'a> Mesh<'a> {
 
 				let [p1, p2, p3] = indices.map(|i| geo.verts[i]);
 
+				let mut tri_mat = Pen::new(tri.material_index as i32);
+
 				// outlines
 				if flags & TRIFLAG_OUTLINE_MASK > TRIFLAG_DRAW_OUTLINE {
 					// if outline flag and at least one side is set
@@ -309,16 +312,18 @@ impl<'a> Mesh<'a> {
 						lines_prim.material = translucent_mat;
 					}
 
-					let colour: [u8; 4] = if tri.material_index < -1023 {
-						translucent_colours[(-1024 - tri.material_index) as usize]
+					let colour: [u8; 4] = if let Pen::Translucent(index) = tri_mat {
+						translucent_colours[index as usize]
 					} else {
-						let index = if (-255..0).contains(&tri.material_index) {
-							-tri.material_index as usize
+						// fallback (unused)
+						//eprintln!("unexpected material {tri_mat:?} on mesh {name} outline");
+						let index = if let Pen::Colour(index) = tri_mat {
+							index as usize
 						} else {
 							1
 						};
-						let rgb = &palette[index * 3..index * 3 + 3];
-						[rgb[0], rgb[1], rgb[2], 255]
+						let [r, g, b] = palette[index * 3..index * 3 + 3].try_into().unwrap();
+						[r, g, b, 255]
 					};
 
 					let i1 = lines_prim.verts.len() as u16;
@@ -352,20 +357,20 @@ impl<'a> Mesh<'a> {
 				}
 
 				// try textured
-				let mut tri_mat = tri.material_index;
-				if tri_mat >= 0 {
-					let mat = &mut materials[tri_mat as usize];
+				if let Pen::Texture(texture_index) = tri_mat {
+					let texture_index = texture_index as usize;
+					let mat = &mut materials[texture_index];
 					match &mat.0 {
-						TextureResult::None => tri_mat = -0xFF, // todo check in-game missing texture
-						TextureResult::Pen(pen) => tri_mat = -*pen as i16, // todo check off by one
+						TextureResult::None => tri_mat = Pen::Colour(0xFF), // todo check in-game missing texture
+						TextureResult::Pen(pen) => tri_mat = *pen,
 						TextureResult::SaveRef { width, height, .. }
 						| TextureResult::SaveEmbed(Texture { width, height, .. }) => {
-							let prim = &mut prims[tri_mat as usize];
+							let prim = &mut prims[texture_index];
 							if prim.material.is_none() {
 								// init prim
 								if mat.1.is_none() {
 									// create material
-									let material_name = self.materials[tri_mat as usize].to_owned();
+									let material_name = self.materials[texture_index].to_owned();
 									match &mat.0 {
 										TextureResult::SaveRef { path, .. } => {
 											mat.1 = Some(gltf.create_texture_material_ref(
@@ -402,12 +407,9 @@ impl<'a> Mesh<'a> {
 
 				// not textured
 				let prim: &mut MeshPrimitive;
-				let mut colour: Option<u8> = None;
-				let mut translucent_colour: Option<u8> = None;
+				let mut colour: Option<[u8; 4]> = None;
 				match tri_mat {
-					0.. => unreachable!(),
-					-255..=-1 => {
-						// coloured
+					Pen::Colour(colour_index) => {
 						prim = &mut colour_prim;
 						if prim.material.is_none() {
 							if colour_mat.is_none() {
@@ -417,10 +419,14 @@ impl<'a> Mesh<'a> {
 							}
 							prim.material = colour_mat;
 						}
-						colour = Some(-tri_mat as u8);
+						let colour_index = colour_index as usize;
+						let [r, g, b] = palette[colour_index * 3..colour_index * 3 + 3]
+							.try_into()
+							.unwrap();
+						colour = Some([r, g, b, 255]);
 					}
-					-1010..=-990 => {
-						// shiny
+					Pen::Shiny(_shiny_index) => {
+						// todo use shiny index
 						prim = &mut shiny_prim;
 						if prim.material.is_none() {
 							if shiny_mat.is_none() {
@@ -429,8 +435,7 @@ impl<'a> Mesh<'a> {
 							prim.material = shiny_mat;
 						}
 					}
-					-1027..=-1024 => {
-						// translucent
+					Pen::Translucent(translucent_index) => {
 						prim = &mut translucent_prim;
 						if prim.material.is_none() {
 							if translucent_mat.is_none() {
@@ -440,16 +445,12 @@ impl<'a> Mesh<'a> {
 							}
 							prim.material = translucent_mat;
 						}
-						translucent_colour = Some((-1024 - tri_mat) as u8); // todo check
+						colour = Some(translucent_colours[translucent_index as usize]);
 					}
-					..=-1028 => {
-						// other translucent?
-						// todo check
-						continue;
-					}
-					_ => {
-						// fallback?
+					Pen::Texture(_) => unreachable!(),
+					Pen::Unknown(_n) => {
 						// todo
+						//eprintln!("unknown mesh material {n} in {name}");
 						continue;
 					}
 				};
@@ -457,15 +458,7 @@ impl<'a> Mesh<'a> {
 				let i1 = prim.verts.len() as u16;
 				prim.verts.extend([p1, p2, p3]);
 				prim.indices.extend([i1, i1 + 2, i1 + 1]); // swizzle indices
-				if let Some(colour_index) = colour {
-					let colour_index = colour_index as usize;
-					let colour: [u8; 3] = palette[colour_index * 3..colour_index * 3 + 3]
-						.try_into()
-						.unwrap();
-					let colour = [colour[0], colour[1], colour[2], 255];
-					prim.colours.extend([colour, colour, colour]);
-				} else if let Some(translucent_index) = translucent_colour {
-					let colour = translucent_colours[translucent_index as usize];
+				if let Some(colour) = colour {
 					prim.colours.extend([colour, colour, colour]);
 				}
 			}
@@ -550,7 +543,7 @@ pub trait TextureHolder<'a> {
 
 pub enum TextureResult<'a> {
 	None,
-	Pen(i32),
+	Pen(Pen),
 	SaveRef {
 		width: u16,
 		height: u16,

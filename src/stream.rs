@@ -38,7 +38,10 @@ pub fn parse_stream(save_sounds: bool, save_textures: bool, save_meshes: bool) {
 	impl<'a> TextureHolder<'a> for StreamTextures<'a> {
 		fn lookup(&mut self, name: &str) -> TextureResult<'a> {
 			let name = &name[..name.len().min(8)]; // truncated material names
-			let mut result: Option<(&'a str, u16, u16)> = None;
+			let mut result_name: Option<&'a str> = None;
+			let mut width = 0;
+			let mut height = 0;
+			let mut masked = false;
 			for (mat_name, mat) in self.mti_materials {
 				if name != *mat_name {
 					continue;
@@ -46,34 +49,41 @@ pub fn parse_stream(save_sounds: bool, save_textures: bool, save_meshes: bool) {
 				match mat {
 					Material::Pen(pen) => return TextureResult::Pen(*pen),
 					Material::Texture(tex, _) => {
-						result = Some((mat_name, tex.width, tex.height));
+						width = tex.width;
+						height = tex.height;
+						masked = tex.pixels.iter().any(|p| *p == 0);
+						result_name = Some(mat_name);
 					}
 					Material::AnimatedTexture(tex, _) => {
 						self.used_textures.push(mat_name);
-						let width = tex[0].width;
-						let height = tex[0].height;
+						width = tex[0].width;
+						height = tex[0].height;
 						assert!(
 							tex[1..]
 								.iter()
 								.all(|t| t.width == width && t.height == height),
 							"mismatched texture dimensions!"
 						);
-						result = Some((mat_name, width, height));
+						masked = tex.iter().any(|frame| frame.pixels.iter().any(|p| *p == 0));
+						result_name = Some(mat_name);
 					}
 				}
 				break;
 			}
-			if result.is_none() {
+			if result_name.is_none() {
 				for (tex_name, tex) in self.bni_textures {
 					if *tex_name != name {
 						continue;
 					}
-					result = Some((tex_name, tex.width, tex.height));
+					result_name = Some(tex_name);
+					width = tex.width;
+					height = tex.height;
+					masked = tex.pixels.iter().any(|p| *p == 0);
 					break;
 				}
 			}
 
-			let Some((name, width, height)) = result else {
+			let Some(name) = result_name else {
 				eprintln!("failed to find stream material {name}");
 				return TextureResult::None;
 			};
@@ -83,6 +93,7 @@ pub fn parse_stream(save_sounds: bool, save_textures: bool, save_meshes: bool) {
 				width,
 				height,
 				path: format!("Textures/{name}.png"),
+				masked,
 			}
 		}
 		fn get_used_colours(&self, name: &str, colours: &mut ColourMap) {

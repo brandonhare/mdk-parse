@@ -1,4 +1,4 @@
-use crate::data_formats::mesh::{Mesh, MeshGeo, MeshTri, MeshType};
+use crate::data_formats::mesh::{Mesh, MeshGeo, MeshTri};
 use crate::{OutputWriter, Reader, Vec3};
 
 pub struct BspPlane {
@@ -68,12 +68,15 @@ impl<'a> Bsp<'a> {
 
 		let bbox = Vec3::calculate_bbox(&verts);
 
+		let geo = MeshGeo { verts, tris, bbox };
+		let mesh_data = geo.split_by_id();
+
 		Bsp {
 			planes,
 			mesh: Mesh {
 				materials,
+				mesh_data,
 				reference_points: Vec::new(),
-				mesh_data: MeshType::Single(MeshGeo { verts, tris, bbox }),
 			},
 		}
 	}

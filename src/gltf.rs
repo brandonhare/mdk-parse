@@ -72,9 +72,9 @@ enum PbrMetallicRoughness {
 	BaseColorFactor([f32; 4]),
 	RoughnessFactor(f32),
 }
-#[derive(Serialize)]
+#[derive(Serialize, Copy, Clone, PartialEq, Eq)]
 #[serde(rename_all = "UPPERCASE")]
-enum AlphaMode {
+pub enum AlphaMode {
 	Opaque,
 	Mask,
 	Blend,
@@ -428,7 +428,7 @@ impl Gltf {
 
 	#[must_use]
 	pub fn create_texture_material_ref(
-		&mut self, name: String, relative_filename: String,
+		&mut self, name: String, relative_filename: String, alpha_mode: Option<AlphaMode>,
 	) -> MaterialIndex {
 		let image_index = ImageIndex(self.images.len());
 		self.images.push(Image {
@@ -452,14 +452,16 @@ impl Gltf {
 			pbr_metallic_roughness: PbrMetallicRoughness::BaseColorTexture(TextureInfo {
 				index: texture_index,
 			}),
-			alpha_mode: None,
+			alpha_mode: alpha_mode.filter(|mode| !matches!(mode, AlphaMode::Opaque)),
 		});
 		material_index
 	}
 
 	#[must_use]
-	pub fn create_texture_material_embedded(&mut self, name: String, data: &[u8]) -> MaterialIndex {
-		self.create_texture_material_ref(name, to_uri(data))
+	pub fn create_texture_material_embedded(
+		&mut self, name: String, data: &[u8], alpha_mode: Option<AlphaMode>,
+	) -> MaterialIndex {
+		self.create_texture_material_ref(name, to_uri(data), alpha_mode)
 	}
 
 	#[must_use]

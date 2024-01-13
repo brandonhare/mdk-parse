@@ -3,6 +3,7 @@ use crate::{data_formats::Texture, OutputWriter, Reader, Vec3};
 pub struct Dti<'a> {
 	pub filename: &'a str,
 
+	pub player_start_arena_index: u32,
 	pub player_start_pos: Vec3,
 	pub player_start_angle: f32,
 	pub sky_info: SkyInfo,
@@ -64,7 +65,7 @@ impl<'a> Dti<'a> {
 	#[allow(clippy::field_reassign_with_default)]
 	pub fn parse(mut data: Reader) -> Dti {
 		let filesize = data.u32() + 4;
-		data.resize(4..);
+		data.rebase();
 
 		let filename = data.str(12);
 		let filesize2 = data.u32();
@@ -77,6 +78,7 @@ impl<'a> Dti<'a> {
 		let skybox_offset = data.u32() as usize;
 
 		// player and skybox info
+		let player_start_arena_index;
 		let player_start_pos;
 		let player_start_angle;
 		let sky_info: SkyInfo;
@@ -85,9 +87,7 @@ impl<'a> Dti<'a> {
 		let sky_src_height: u16;
 		{
 			data.set_position(player_and_sky_offset);
-			let arena_index = data.u32();
-			assert_eq!(arena_index, 0);
-
+			player_start_arena_index = data.u32();
 			player_start_pos = data.vec3();
 			player_start_angle = data.f32();
 
@@ -250,6 +250,7 @@ impl<'a> Dti<'a> {
 
 		Dti {
 			filename,
+			player_start_arena_index,
 			player_start_pos,
 			player_start_angle,
 			sky_info,
@@ -267,8 +268,8 @@ impl<'a> Dti<'a> {
 
 		use std::fmt::Write;
 		let mut info = format!(
-			"name: {}\n\nplayer start pos: {}, angle: {}\ntranslucent colours: {:?}\npalette free rows: {}\n\n{:#?}\n\narenas ({}):\n",
-			self.filename, self.player_start_pos, self.player_start_angle, self.translucent_colours, self.num_pal_free_pixels / 16, self.sky_info, self.arenas.len()
+			"name: {}\n\nplayer start arena: {}, pos: {}, angle: {}\ntranslucent colours: {:?}\npalette free rows: {}\n\n{:#?}\n\narenas ({}):\n",
+			self.filename, self.player_start_arena_index, self.player_start_pos, self.player_start_angle, self.translucent_colours, self.num_pal_free_pixels / 16, self.sky_info, self.arenas.len()
 		);
 
 		for (arena_index, arena) in self.arenas.iter().enumerate() {

@@ -138,9 +138,6 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 			all_sounds.extend(sni_s.sounds.iter().map(|(name, sound)| (*name, sound)));
 		}
 
-		all_meshes.extend(sni_o.bsps.iter().map(|(name, bsp)| (*name, &bsp.mesh)));
-		all_meshes.extend(sni_s.bsps.iter().map(|(name, bsp)| (*name, &bsp.mesh)));
-
 		all_textures.extend(
 			sni_o
 				.anims
@@ -180,11 +177,15 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 					}
 				}
 				all_meshes.insert(arena.name, &arena.bsp.mesh);
-				let entity_arenas = &mut cmi.entities.entry(arena.name).or_default().arenas;
-				if !entity_arenas.contains(&arena.name) {
-					entity_arenas.push(arena.name);
-					entity_arenas.sort_unstable();
-				}
+				assert!(
+					cmi.entities
+						.entry(arena.name)
+						.or_default()
+						.arenas
+						.contains(&arena.name),
+					"cmi arena {} missing in entities!",
+					arena.name
+				);
 
 				// don't add arena sounds, do that later so we can organize them in folders
 
@@ -211,6 +212,16 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 					}
 				}
 			}
+		}
+
+		assert!(sni_s.bsps.is_empty());
+		for (name, bsp) in &sni_o.bsps {
+			assert_eq!(name.as_bytes()[0], b'C');
+			let entity = cmi.entities.entry(name).or_default();
+			let arena_name = &name[1..];
+			assert!(palettes.contains_key(arena_name));
+			entity.arenas.push(&name[1..]);
+			all_meshes.insert(*name, &bsp.mesh);
 		}
 
 		// clone palettes to corridors
@@ -283,13 +294,16 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 					//println!("level {level_index} mesh {name} not in any arenas"); // todo
 
 					for &tex_name in mesh.materials.iter() {
+						if tex_name.is_empty() {
+							continue;
+						}
 						if all_textures.contains_key(tex_name) {
 							used_textures
 								.entry(tex_name)
 								.or_default()
 								.extend(palettes.keys().map(|arena| (*arena, *arena)));
 						} else if !all_pens.contains_key(tex_name) {
-							//println!("level {level_index} mesh {name} missing tex {tex_name}"); // todo
+							// println!("level {level_index} mesh {name} missing texture {tex_name}"); // todo
 						}
 					}
 
@@ -297,13 +311,16 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 				};
 
 				for &tex_name in mesh.materials.iter() {
+					if tex_name.is_empty() {
+						continue;
+					}
 					if all_textures.contains_key(tex_name) {
 						used_textures
 							.entry(tex_name)
 							.or_default()
 							.extend(arenas.iter().map(|arena| (*arena, *arena)));
 					} else if !all_pens.contains_key(tex_name) {
-						//println!("level {level_index} mesh {name} missing tex {tex_name}"); // todo
+						// println!("level {level_index} mesh {name} missing tex {tex_name}"); // todo
 					}
 				}
 			}
@@ -375,16 +392,21 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 						assert!(tex[1..]
 							.iter()
 							.all(|t| t.width == width && t.height == height));
+						let masked = tex
+							.iter()
+							.any(|frames| frames.pixels.iter().any(|p| *p == 0));
 						return TextureResult::SaveRef {
 							width,
 							height,
 							path,
+							masked,
 						};
 					}
 					if let Some(pen) = self.pens.get(name) {
 						return TextureResult::Pen(*pen);
 					}
-					//eprintln!("missing texture {name}");
+
+					// missing
 					TextureResult::None
 				}
 				fn get_used_colours(&self, name: &str, colours: &mut ColourMap) {
@@ -482,9 +504,23 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 				if used_textures.contains_key(name) {
 					continue;
 				}
+
 				temp_arenas.clear();
-				temp_arenas.extend(palettes.keys().map(|arena| (*arena, *arena)));
-				temp_arenas.sort_unstable();
+				// find palettes
+				'outer: for arena in &mto.arenas {
+					for (mti_name, _) in &arena.mti.materials {
+						if name == *mti_name {
+							temp_arenas.push((arena.name, arena.name));
+							break 'outer;
+						}
+					}
+				}
+				if temp_arenas.is_empty() {
+					// try all palettes
+					temp_arenas.extend(palettes.keys().map(|arena| (*arena, *arena)));
+					temp_arenas.sort_unstable();
+				}
+
 				let num_unique = filter_textures(tex, &palettes, &mut temp_arenas);
 
 				let output = if tex.len() == 1 {

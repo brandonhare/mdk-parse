@@ -6,10 +6,9 @@ sni sound type values
 traverse 3d animations
 traverse other output? splines? scripts? reports?
 traverse unused meshes/textures?
-fix wrong outlines (backfaces)
+hide backface outlines
 fix shiny z-fighting
-masked mesh textures
 some wrong colours
 shiny types?
 find unknown mesh material -1028
-replace mesh texture finder thing
+other mesh material types

@@ -1,5 +1,9 @@
+use std::borrow::Cow;
+use std::collections::HashMap;
+
 use crate::data_formats::{image_formats::ColourMap, Texture};
 use crate::file_formats::mti::Pen;
+use crate::gltf::AlphaMode;
 use crate::{gltf, OutputWriter, Reader, Vec2, Vec3};
 
 pub struct Mesh<'a> {
@@ -16,6 +20,7 @@ pub enum MeshType<'a> {
 	},
 }
 
+#[derive(Default)]
 pub struct MeshGeo {
 	pub verts: Vec<Vec3>,
 	pub tris: Vec<MeshTri>,
@@ -46,30 +51,123 @@ impl MeshGeo {
 
 	fn get_used_colours(&self, colours: &mut ColourMap) {
 		for tri in &self.tris {
-			if (-256..=-1).contains(&tri.material_index) {
-				colours.push((-1 - tri.material_index) as u8);
+			if let Pen::Colour(colour) = tri.material {
+				colours.push(colour);
 			}
+		}
+	}
+
+	pub fn split_by_id(mut self) -> MeshType<'static> {
+		let mut submeshes: Vec<Submesh> = Vec::new();
+		let mut tri_map: HashMap<(u8, u16), u16> = HashMap::new();
+
+		self.tris.retain(|tri| {
+			let id = tri.flags >> TRIFLAG_ID_SHIFT;
+			if id == 0 {
+				return true;
+			}
+
+			let id_key = id as f32;
+			let target = if let Some(sub) = submeshes.iter_mut().find(|sub| sub.origin[0] == id_key)
+			{
+				&mut sub.mesh_data
+			} else {
+				submeshes.push(Submesh {
+					name: id.to_string().into(),
+					origin: Vec3::new(id_key, 0.0, 0.0),
+					..Default::default()
+				});
+				&mut submeshes.last_mut().unwrap().mesh_data
+			};
+
+			let mut tri = tri.clone();
+			for i in &mut tri.indices {
+				*i = *tri_map.entry((id as u8, *i)).or_insert_with(|| {
+					let n = target.verts.len();
+					target.verts.push(self.verts[*i as usize]);
+					n as u16
+				});
+			}
+			target.tris.push(tri);
+
+			false
+		});
+
+		if submeshes.is_empty() {
+			MeshType::Single(self)
+		} else {
+			// remove unused verts
+			tri_map.clear();
+			for tri in &self.tris {
+				for i in tri.indices {
+					tri_map.insert((0, i), 0);
+				}
+			}
+			let mut i = 0;
+			let mut count = 0;
+			self.verts.retain(|_| {
+				if let Some(v) = tri_map.get_mut(&(0, i)) {
+					*v = count;
+					count += 1;
+					i += 1;
+					true
+				} else {
+					i += 1;
+					false
+				}
+			});
+			for tri in &mut self.tris {
+				for i in &mut tri.indices {
+					*i = *tri_map.get(&(0, *i)).unwrap();
+				}
+			}
+
+			for sub in &mut submeshes {
+				sub.origin = Default::default();
+				sub.mesh_data.bbox = Vec3::calculate_bbox(&sub.mesh_data.verts);
+			}
+
+			let bbox = self.bbox;
+			submeshes.insert(
+				0,
+				Submesh {
+					mesh_data: self,
+					name: "Base".into(),
+					origin: Default::default(),
+				},
+			);
+			submeshes[1..].sort_unstable_by(|a, b| {
+				a.name
+					.len()
+					.cmp(&b.name.len())
+					.then_with(|| a.name.cmp(&b.name))
+			});
+			MeshType::Multimesh { submeshes, bbox }
 		}
 	}
 }
 
+#[derive(Default)]
 pub struct Submesh<'a> {
 	pub mesh_data: MeshGeo,
-	pub name: &'a str,
+	pub name: Cow<'a, str>,
 	pub origin: Vec3,
 }
 
-const TRIFLAG_HIDDEN: u32 = 0x2;
+const TRIFLAG_HIDDEN: u32 = 0x12;
 const TRIFLAG_OUTLINE_12: u32 = 0x10_00_00;
 const TRIFLAG_OUTLINE_23: u32 = 0x20_00_00;
 const TRIFLAG_OUTLINE_13: u32 = 0x40_00_00;
+const TRIFLAG_OUTLINE_MASK_LINES: u32 = 0x70_00_00;
 const TRIFLAG_DRAW_OUTLINE: u32 = 0x80_00_00;
 const TRIFLAG_OUTLINE_MASK: u32 = 0xF0_00_00;
 const TRIFLAG_ID_MASK: u32 = 0xFF_00_00_00;
+const TRIFLAG_ID_SHIFT: usize = 24;
 
+#[derive(Clone)]
 pub struct MeshTri {
 	pub indices: [u16; 3],
-	pub material_index: i16,
+	pub material: Pen,
 	pub uvs: [Vec2; 3],
 	pub flags: u32, // bsp id and flags, 0 for normal meshes
 }
@@ -80,17 +178,43 @@ impl MeshTri {
 		}
 		let mut result = Vec::with_capacity(count);
 		for _ in 0..count {
-			let indices: [u16; 3] = reader.try_get()?;
+			let indices @ [i1, i2, i3]: [u16; 3] = reader.try_get()?;
 			let material_index: i16 = reader.try_i16()?;
 			if material_index > 256 {
 				return None;
 			}
+			let material = Pen::new(material_index as i32);
 			let uvs: [[f32; 2]; 3] = reader.try_get_unvalidated()?;
-			let flags = reader.try_u32()?;
+			let mut flags = reader.try_u32()?;
+
+			// remove invalid outline flags
+			if flags & TRIFLAG_DRAW_OUTLINE == 0 {
+				flags &= !TRIFLAG_OUTLINE_MASK; // clear unused flags
+			} else {
+				// remove degenerate lines
+				if i1 == i2 {
+					flags &= !TRIFLAG_OUTLINE_12;
+				}
+				if i1 == i3 {
+					flags &= !TRIFLAG_OUTLINE_13;
+				}
+				if i2 == i3 {
+					flags &= !TRIFLAG_OUTLINE_23;
+				}
+				// none left
+				if flags & TRIFLAG_OUTLINE_MASK_LINES == 0 {
+					flags &= !TRIFLAG_OUTLINE_MASK; // clear main bit
+				}
+			}
+
+			// skip degenerate tris
+			if (i1 == i2 || i1 == i3 || i2 == i3) && (flags & TRIFLAG_OUTLINE_MASK == 0) {
+				continue;
+			}
 
 			result.push(MeshTri {
 				indices,
-				material_index,
+				material,
 				uvs,
 				flags,
 			});
@@ -117,8 +241,16 @@ impl<'a> Mesh<'a> {
 			textures.push(reader.try_str(16)?);
 		}
 
+		let mut used_textures = vec![false; num_textures];
+
 		let mesh_data = if !is_multimesh {
-			MeshType::Single(MeshGeo::try_parse(reader)?)
+			let geo = MeshGeo::try_parse(reader)?;
+			for tri in &geo.tris {
+				if let Pen::Texture(index) = tri.material {
+					used_textures[index as usize] = true;
+				}
+			}
+			MeshType::Single(geo)
 		} else {
 			let num_submeshes = reader.try_u32().filter(|n| *n < 100)? as usize;
 			let mut submeshes = Vec::with_capacity(num_submeshes);
@@ -127,12 +259,17 @@ impl<'a> Mesh<'a> {
 				let name = reader.try_str(12)?;
 				let origin = reader.try_vec3()?.swizzle();
 				let mut mesh_data = MeshGeo::try_parse(reader)?;
-				for tri in mesh_data.verts.iter_mut() {
-					*tri -= origin;
+				for point in mesh_data.verts.iter_mut() {
+					*point -= origin;
+				}
+				for tri in &mesh_data.tris {
+					if let Pen::Texture(index) = tri.material {
+						used_textures[index as usize] = true;
+					}
 				}
 				submeshes.push(Submesh {
 					mesh_data,
-					name,
+					name: name.into(),
 					origin,
 				});
 			}
@@ -149,6 +286,13 @@ impl<'a> Mesh<'a> {
 		let num_reference_points = reader.try_u32()?;
 		let reference_points =
 			Vec3::swizzle_vec(reader.try_get_vec(num_reference_points as usize)?);
+
+		// remove unused textures
+		for (used, tex) in used_textures.iter().zip(textures.iter_mut()) {
+			if !used {
+				*tex = "";
+			}
+		}
 
 		Some(Mesh {
 			materials: textures,
@@ -201,9 +345,9 @@ impl<'a> Mesh<'a> {
 			}
 			MeshType::Multimesh { submeshes, .. } => {
 				for sub in submeshes {
-					let submesh = create_submesh(gltf, sub.name.to_owned(), &sub.mesh_data);
+					let submesh = create_submesh(gltf, sub.name.to_string(), &sub.mesh_data);
 					let sub_node =
-						gltf.create_child_node(target, sub.name.to_owned(), Some(submesh));
+						gltf.create_child_node(target, sub.name.to_string(), Some(submesh));
 					gltf.set_node_position(sub_node, sub.origin);
 				}
 			}
@@ -227,7 +371,16 @@ impl<'a> Mesh<'a> {
 		let mut materials: Vec<(TextureResult, Option<gltf::MaterialIndex>)> = self
 			.materials
 			.iter()
-			.map(|mat| (textures.lookup(mat), None))
+			.map(|mat| {
+				(
+					if mat.is_empty() {
+						TextureResult::None
+					} else {
+						textures.lookup(mat)
+					},
+					None,
+				)
+			})
 			.collect();
 
 		let palette = textures.get_palette();
@@ -284,21 +437,10 @@ impl<'a> Mesh<'a> {
 				if flags & TRIFLAG_HIDDEN != 0 {
 					continue;
 				}
-				// filter degenerates
-				let degen = match (i1 == i2, i1 == i3, i2 == i3) {
-					(false, false, false) => false,
-					(true, true, true) => continue,
-					(_, _, _) if flags & TRIFLAG_DRAW_OUTLINE == 0 => continue, // no outlines
-					// outlines on lines are ok
-					(false, _, _) if flags & TRIFLAG_OUTLINE_12 != 0 => true,
-					(_, false, _) if flags & TRIFLAG_OUTLINE_13 != 0 => true,
-					(_, _, false) if flags & TRIFLAG_OUTLINE_23 != 0 => true,
-					_ => continue,
-				};
 
 				let [p1, p2, p3] = indices.map(|i| geo.verts[i]);
 
-				let mut tri_mat = Pen::new(tri.material_index as i32);
+				let mut tri_mat = tri.material;
 
 				// outlines
 				if flags & TRIFLAG_OUTLINE_MASK > TRIFLAG_DRAW_OUTLINE {
@@ -353,7 +495,8 @@ impl<'a> Mesh<'a> {
 					}
 				} // end outlines
 
-				if degen {
+				// filter partial degenerates (after outlines)
+				if i1 == i2 || i1 == i3 || i2 == i3 {
 					continue;
 				}
 
@@ -364,25 +507,40 @@ impl<'a> Mesh<'a> {
 					match &mat.0 {
 						TextureResult::None => tri_mat = Pen::Colour(0xFF), // todo check in-game missing texture
 						TextureResult::Pen(pen) => tri_mat = *pen,
-						TextureResult::SaveRef { width, height, .. }
-						| TextureResult::SaveEmbed(Texture { width, height, .. }) => {
+						TextureResult::SaveRef {
+							width,
+							height,
+							masked,
+							..
+						}
+						| TextureResult::SaveEmbed {
+							texture: Texture { width, height, .. },
+							masked,
+						} => {
 							let prim = &mut prims[texture_index];
 							if prim.material.is_none() {
 								// init prim
 								if mat.1.is_none() {
 									// create material
 									let material_name = self.materials[texture_index].to_owned();
+									let alpha_mode = if *masked {
+										AlphaMode::Mask
+									} else {
+										AlphaMode::Opaque
+									};
 									match &mat.0 {
 										TextureResult::SaveRef { path, .. } => {
 											mat.1 = Some(gltf.create_texture_material_ref(
 												material_name,
 												path.clone(),
+												Some(alpha_mode),
 											));
 										}
-										TextureResult::SaveEmbed(tex) => {
+										TextureResult::SaveEmbed { texture, .. } => {
 											mat.1 = Some(gltf.create_texture_material_embedded(
 												material_name,
-												&tex.create_png(Some(palette)),
+												&texture.create_png(Some(palette)),
+												Some(alpha_mode),
 											));
 										}
 										_ => unreachable!(),
@@ -503,9 +661,9 @@ impl<'a> Mesh<'a> {
 			}
 			MeshType::Multimesh { submeshes, .. } => {
 				for sub in submeshes {
-					let submesh = create_submesh(gltf, sub.name.to_owned(), &sub.mesh_data);
+					let submesh = create_submesh(gltf, sub.name.to_string(), &sub.mesh_data);
 					let sub_node =
-						gltf.create_child_node(target, sub.name.to_owned(), Some(submesh));
+						gltf.create_child_node(target, sub.name.to_string(), Some(submesh));
 					gltf.set_node_position(sub_node, sub.origin);
 				}
 			}
@@ -553,6 +711,10 @@ pub enum TextureResult<'a> {
 		width: u16,
 		height: u16,
 		path: String,
+		masked: bool,
 	},
-	SaveEmbed(Texture<'a>),
+	SaveEmbed {
+		texture: Texture<'a>,
+		masked: bool,
+	},
 }

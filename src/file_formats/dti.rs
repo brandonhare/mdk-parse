@@ -83,8 +83,8 @@ impl<'a> Dti<'a> {
 		let player_start_angle;
 		let sky_info: SkyInfo;
 		let translucent_colours;
-		let sky_src_width: u16;
-		let sky_src_height: u16;
+		let sky_src_width;
+		let sky_src_height;
 		{
 			data.set_position(player_and_sky_offset);
 			player_start_arena_index = data.u32();
@@ -96,20 +96,16 @@ impl<'a> Dti<'a> {
 			let y = data.i32();
 			let x = data.i32();
 			let dest_width = data.u32() + 4;
-			let src_height = data.u32();
+			let dest_height = data.u32();
 			let reflected_top_colour = data.i32();
 			let reflected_bottom_colour = data.i32();
 
 			let has_reflection = reflected_top_colour >= 0;
-			let (dest_height, src_width) = if has_reflection {
-				assert!(src_height & 1 == 0);
-				(src_height / 2, dest_width * 2)
+			(sky_src_width, sky_src_height) = if has_reflection {
+				(dest_width, dest_height * 2)
 			} else {
-				(src_height, dest_width)
+				(dest_width, dest_height)
 			};
-
-			sky_src_height = src_height as u16;
-			sky_src_width = src_width as u16;
 
 			sky_info = SkyInfo {
 				ceiling_colour,
@@ -241,7 +237,7 @@ impl<'a> Dti<'a> {
 		let skybox = {
 			data.set_position(skybox_offset);
 			let sky_pixels = data.slice(sky_src_width as usize * sky_src_height as usize);
-			Texture::new(sky_src_width, sky_src_height, sky_pixels)
+			Texture::new(sky_src_width as u16, sky_src_height as u16, sky_pixels)
 		};
 
 		let filename_footer = data.str(12);

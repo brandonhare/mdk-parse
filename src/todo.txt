@@ -1,4 +1,5 @@
-dti skybox reflection index, more params, entity arena num
+dti arena num
+skybox + 4 width offset?
 fall3d.bni/zoom animation palette
 mesh reference points purpose
 textures a, b, flags?
@@ -9,6 +10,9 @@ traverse unused meshes/textures?
 hide backface outlines
 fix shiny z-fighting
 some wrong colours
-shiny types?
+shiny types? height offset?
 find unknown mesh material -1028
 other mesh material types
+split bni shared assets
+fall3d
+misc

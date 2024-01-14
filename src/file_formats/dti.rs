@@ -20,10 +20,6 @@ pub struct Dti<'a> {
 pub struct SkyInfo {
 	pub ceiling_colour: i32,
 	pub floor_colour: i32,
-	pub y: i32,
-	pub x: i32,
-	pub dest_width: u32,
-	pub dest_height: u32,
 	pub reflected_top_colour: i32,
 	pub reflected_bottom_colour: i32,
 }
@@ -83,8 +79,10 @@ impl<'a> Dti<'a> {
 		let player_start_angle;
 		let sky_info: SkyInfo;
 		let translucent_colours;
-		let sky_src_width;
-		let sky_src_height;
+		let sky_width;
+		let sky_height;
+		let sky_x;
+		let sky_y;
 		{
 			data.set_position(player_and_sky_offset);
 			player_start_arena_index = data.u32();
@@ -93,29 +91,18 @@ impl<'a> Dti<'a> {
 
 			let ceiling_colour = data.i32();
 			let floor_colour = data.i32();
-			let y = data.i32();
-			let x = data.i32();
-			let dest_width = data.u32() + 4;
-			let dest_height = data.u32();
+			sky_y = data.i32();
+			sky_x = data.i32();
+			sky_width = data.u32();
+			sky_height = data.u32();
 			let reflected_top_colour = data.i32();
 			let reflected_bottom_colour = data.i32();
-
-			let has_reflection = reflected_top_colour >= 0;
-			(sky_src_width, sky_src_height) = if has_reflection {
-				(dest_width, dest_height * 2)
-			} else {
-				(dest_width, dest_height)
-			};
 
 			sky_info = SkyInfo {
 				ceiling_colour,
 				floor_colour,
-				y,
-				x,
-				dest_width,
 				reflected_top_colour,
 				reflected_bottom_colour,
-				dest_height,
 			};
 
 			let colours = data.get::<[[i32; 4]; 4]>();
@@ -236,8 +223,20 @@ impl<'a> Dti<'a> {
 		// skybox
 		let skybox = {
 			data.set_position(skybox_offset);
-			let sky_pixels = data.slice(sky_src_width as usize * sky_src_height as usize);
-			Texture::new(sky_src_width as u16, sky_src_height as u16, sky_pixels)
+			let src_width = sky_width as usize + 4;
+			let src_height = if sky_info.reflected_top_colour >= 0 {
+				sky_height * 2
+			} else {
+				sky_height
+			} as usize;
+			let sky_pixels = data.slice(src_width * src_height);
+			let mut pixels = Vec::with_capacity(sky_width as usize * src_height);
+			for row in sky_pixels.chunks_exact(src_width) {
+				pixels.extend(&row[..sky_width as usize]);
+			}
+			let mut skybox = Texture::new(sky_width as u16, src_height as u16, pixels);
+			skybox.position = (sky_x as i16, sky_y as i16);
+			skybox
 		};
 
 		let filename_footer = data.str(12);

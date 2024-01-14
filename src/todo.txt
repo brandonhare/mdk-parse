@@ -1,9 +1,8 @@
 dti arena num
-fall3d.bni/zoom animation palette
 mesh reference points purpose
 textures a, b, flags?
 sni sound type values
-traverse 3d animations
+all 3d animations output
 traverse other output? splines? scripts? reports?
 traverse unused meshes/textures?
 hide backface outlines
@@ -13,5 +12,8 @@ calculate exact sky and shiny offsets
 find unknown mesh material -1028
 other mesh material types
 split bni shared assets
-fall3d
+fall3d animation fps
+fall3d colours (zoom, flare)
+fall3d dedup shared assets
 misc
+make texture holder return full frames and path by ref

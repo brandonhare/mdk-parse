@@ -26,6 +26,13 @@ impl<'a> Texture<'a> {
 		}
 	}
 
+	pub fn clone_ref(&self) -> Texture {
+		Texture {
+			pixels: self.pixels.as_ref().into(),
+			..*self
+		}
+	}
+
 	pub fn create_png(&self, palette: Option<&[u8]>) -> Vec<u8> {
 		let _ = palette;
 		todo!()

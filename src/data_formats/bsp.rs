@@ -71,14 +71,15 @@ impl<'a> Bsp<'a> {
 		let geo = MeshGeo { verts, tris, bbox };
 		let mesh_data = geo.split_by_id();
 
-		Bsp {
-			planes,
-			mesh: Mesh {
-				materials,
-				mesh_data,
-				reference_points: Vec::new(),
-			},
-		}
+		let mut mesh = Mesh {
+			materials,
+			mesh_data,
+			reference_points: Vec::new(),
+		};
+
+		mesh.remove_unused_materials();
+
+		Bsp { planes, mesh }
 	}
 
 	pub fn save_as(&self, name: &str, output: &mut OutputWriter) {

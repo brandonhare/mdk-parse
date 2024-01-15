@@ -558,11 +558,7 @@ impl Gltf {
 			target,
 		});
 
-		let (min, max) = if matches!(T::ACCESSOR_TYPE, AccessorType::Scalar) {
-			Default::default()
-		} else {
-			T::to_minmax(data)
-		};
+		let (min, max) = T::to_minmax(data);
 
 		let accessor_index = AccessorIndex(self.accessors.len());
 		self.accessors.push(Accessor {

@@ -241,16 +241,8 @@ impl<'a> Mesh<'a> {
 			textures.push(reader.try_str(16)?);
 		}
 
-		let mut used_textures = vec![false; num_textures];
-
 		let mesh_data = if !is_multimesh {
-			let geo = MeshGeo::try_parse(reader)?;
-			for tri in &geo.tris {
-				if let Pen::Texture(index) = tri.material {
-					used_textures[index as usize] = true;
-				}
-			}
-			MeshType::Single(geo)
+			MeshType::Single(MeshGeo::try_parse(reader)?)
 		} else {
 			let num_submeshes = reader.try_u32().filter(|n| *n < 100)? as usize;
 			let mut submeshes = Vec::with_capacity(num_submeshes);
@@ -261,11 +253,6 @@ impl<'a> Mesh<'a> {
 				let mut mesh_data = MeshGeo::try_parse(reader)?;
 				for point in mesh_data.verts.iter_mut() {
 					*point -= origin;
-				}
-				for tri in &mesh_data.tris {
-					if let Pen::Texture(index) = tri.material {
-						used_textures[index as usize] = true;
-					}
 				}
 				submeshes.push(Submesh {
 					mesh_data,
@@ -287,18 +274,60 @@ impl<'a> Mesh<'a> {
 		let reference_points =
 			Vec3::swizzle_vec(reader.try_get_vec(num_reference_points as usize)?);
 
-		// remove unused textures
-		for (used, tex) in used_textures.iter().zip(textures.iter_mut()) {
-			if !used {
-				*tex = "";
-			}
-		}
-
-		Some(Mesh {
+		let mut result = Mesh {
 			materials: textures,
 			mesh_data,
 			reference_points,
-		})
+		};
+
+		result.remove_unused_materials();
+
+		Some(result)
+	}
+
+	pub fn for_tris_mut(&mut self, mut func: impl FnMut(&mut [MeshTri])) {
+		match &mut self.mesh_data {
+			MeshType::Single(geo) => func(&mut geo.tris),
+			MeshType::Multimesh { submeshes, .. } => {
+				for mesh in submeshes {
+					func(&mut mesh.mesh_data.tris);
+				}
+			}
+		}
+	}
+
+	pub fn remove_unused_materials(&mut self) {
+		let mut used = vec![0; self.materials.len()];
+
+		self.for_tris_mut(|tris| {
+			for tri in tris {
+				if let Pen::Texture(index) = tri.material {
+					used[index as usize] = 1;
+				}
+			}
+		});
+
+		let mut i = 0;
+		let mut count = 0;
+		self.materials.retain(|_| {
+			if used[i] != 0 {
+				used[i] = count;
+				count += 1;
+				i += 1;
+				true
+			} else {
+				i += 1;
+				false
+			}
+		});
+
+		self.for_tris_mut(|tris| {
+			for tri in tris {
+				if let Pen::Texture(index) = &mut tri.material {
+					*index = used[*index as usize];
+				}
+			}
+		});
 	}
 
 	pub fn save_as(&self, name: &str, output: &mut OutputWriter) {
@@ -371,16 +400,7 @@ impl<'a> Mesh<'a> {
 		let mut materials: Vec<(TextureResult, Option<gltf::MaterialIndex>)> = self
 			.materials
 			.iter()
-			.map(|mat| {
-				(
-					if mat.is_empty() {
-						TextureResult::None
-					} else {
-						textures.lookup(mat)
-					},
-					None,
-				)
-			})
+			.map(|mat| (textures.lookup(mat), None))
 			.collect();
 
 		let palette = textures.get_palette();

@@ -84,7 +84,8 @@ pub fn parse_stream(save_sounds: bool, save_textures: bool, save_meshes: bool) {
 			}
 
 			let Some(name) = result_name else {
-				eprintln!("failed to find stream material {name}");
+				// todo
+				//println!("failed to find stream material {name}");
 				return TextureResult::None;
 			};
 

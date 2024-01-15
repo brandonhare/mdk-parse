@@ -78,6 +78,8 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 	let trav_bni = std::fs::read("assets/TRAVERSE/TRAVSPRT.BNI").unwrap();
 	let trav_bni = Bni::parse(Reader::new(&trav_bni));
 
+	let pickups_names: [String; 9] = std::array::from_fn(|i| format!("PICKUPS_{i}"));
+
 	let mut temp_filename = String::new();
 
 	for level_index in 3..=8 {
@@ -120,6 +122,7 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 
 		all_meshes.extend(trav_bni.meshes.iter().map(|(name, mesh)| (*name, mesh)));
 
+		// todo bni textures aren't used by anything in the levels directly, save them separately
 		all_textures.extend(
 			trav_bni
 				.textures
@@ -132,6 +135,11 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 				.iter()
 				.map(|(name, frames)| (*name, frames.as_slice())),
 		);
+
+		// split pickups animation
+		for (i, frame) in all_textures.remove("PICKUPS").unwrap().iter().enumerate() {
+			all_textures.insert(&pickups_names[i], std::slice::from_ref(frame));
+		}
 
 		if save_sounds {
 			all_sounds.extend(sni_o.sounds.iter().map(|(name, sound)| (*name, sound)));
@@ -165,11 +173,13 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 			}
 		}
 
+		// add mto assets/arenas/palettes
 		{
 			let mut palette_output = output.push_dir("Palettes");
 			for arena in &mto.arenas {
 				for (mesh_name, mesh) in &arena.meshes {
 					all_meshes.insert(mesh_name, mesh);
+					// register mesh as belonging to this arena
 					let entity_arenas = &mut cmi.entities.entry(mesh_name).or_default().arenas;
 					if !entity_arenas.contains(&arena.name) {
 						entity_arenas.push(arena.name);
@@ -189,15 +199,16 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 
 				// don't add arena sounds, do that later so we can organize them in folders
 
-				let num_bytes = dti.num_pal_free_pixels as usize * 3;
+				let num_free_palette_bytes = dti.num_pal_free_pixels as usize * 3;
 				let mut palette = dti.pal.to_vec();
-				palette[4 * 16 * 3..4 * 16 * 3 + num_bytes]
-					.copy_from_slice(&arena.palette[..num_bytes]);
+				palette[4 * 16 * 3..4 * 16 * 3 + num_free_palette_bytes]
+					.copy_from_slice(&arena.palette[..num_free_palette_bytes]);
 				if save_textures {
 					palette_output.write_palette(arena.name, &palette);
 				}
 				palettes.insert(arena.name, palette);
 
+				// add materials
 				for (name, mat) in arena.mti.materials.iter() {
 					match mat {
 						Material::Pen(pen) => {
@@ -214,34 +225,23 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 			}
 		}
 
-		assert!(sni_s.bsps.is_empty());
-		for (name, bsp) in &sni_o.bsps {
-			assert_eq!(name.as_bytes()[0], b'C');
-			let entity = cmi.entities.entry(name).or_default();
-			let arena_name = &name[1..];
-			assert!(palettes.contains_key(arena_name));
-			entity.arenas.push(&name[1..]);
-			all_meshes.insert(*name, &bsp.mesh);
-		}
+		// add corridor bsps and assign to their parent arena so they get correct palettes
+		for (corridor_name, bsp) in &sni_o.bsps {
+			assert_eq!(corridor_name.as_bytes()[0], b'C');
+			let arena_name = &corridor_name[1..];
 
-		// clone palettes to corridors
-		for arena in cmi.arenas.iter() {
-			if !palettes.contains_key(arena.name) {
-				if let Some(pal) = palettes.get(&arena.name[1..]) {
-					palettes.insert(arena.name, pal.clone());
-				}
+			let entity = cmi.entities.entry(corridor_name).or_default();
+			if entity.arenas == [*corridor_name] {
+				// referenced in cmi, add a new palette
+				let pal = palettes.get(arena_name).unwrap();
+				palettes.insert(corridor_name, pal.clone());
+			} else {
+				// not referenced anywhere, add to parent arena
+				all_meshes.insert(*corridor_name, &bsp.mesh);
+				entity.arenas.push(arena_name);
 			}
 		}
-
-		// register corridor and level meshes in cmi entities
-		for &mesh_name in all_meshes.keys() {
-			if !palettes.contains_key(mesh_name) {
-				continue;
-			}
-			let entity_arenas = &mut cmi.entities.entry(mesh_name).or_default().arenas;
-			entity_arenas.clear();
-			entity_arenas.push(mesh_name);
-		}
+		assert!(sni_s.bsps.is_empty(), "unexpected bsps in sni_s");
 
 		all_meshes.extend(
 			cmi.entities
@@ -294,16 +294,13 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 					//println!("level {level_index} mesh {name} not in any arenas"); // todo
 
 					for &tex_name in mesh.materials.iter() {
-						if tex_name.is_empty() {
-							continue;
-						}
 						if all_textures.contains_key(tex_name) {
 							used_textures
 								.entry(tex_name)
 								.or_default()
 								.extend(palettes.keys().map(|arena| (*arena, *arena)));
 						} else if !all_pens.contains_key(tex_name) {
-							// println!("level {level_index} mesh {name} missing texture {tex_name}"); // todo
+							//println!("level {level_index} mesh {name} missing material {tex_name}"); // todo
 						}
 					}
 
@@ -311,22 +308,18 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 				};
 
 				for &tex_name in mesh.materials.iter() {
-					if tex_name.is_empty() {
-						continue;
-					}
 					if all_textures.contains_key(tex_name) {
 						used_textures
 							.entry(tex_name)
 							.or_default()
 							.extend(arenas.iter().map(|arena| (*arena, *arena)));
 					} else if !all_pens.contains_key(tex_name) {
-						// println!("level {level_index} mesh {name} missing tex {tex_name}"); // todo
+						//println!("level {level_index} mesh {name} missing material {tex_name}"); // todo
 					}
 				}
 			}
 
 			// save mesh textures
-
 			{
 				let mut output = output.push_dir("Textures"); // inside mesh folder
 				for (&name, arenas) in used_textures.iter_mut() {
@@ -346,6 +339,7 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 							Some(&palettes[arenas[0].0]),
 						);
 					} else {
+						//println!("level {level_index} splitting mesh texture {name}");
 						for (arena_src, arena_dest) in arenas.iter() {
 							if arena_src == arena_dest {
 								temp_filename.clear();
@@ -459,8 +453,9 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 						}
 					}
 					if mesh_arenas.is_empty() {
-						// todo
-						// eprintln!("level {level_index} mesh {name} cant find arenas");
+						// shouldn't happen, textures are already split by arena
+						// (maybe if the mesh is only flat coloured and different between arenas)
+						//println!("level {level_index} mesh {name} cant find arenas");
 						mesh_arenas.extend(mto.arenas.iter().map(|arena| (arena.name, arena.name)));
 					}
 
@@ -477,6 +472,7 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 						mesh.save_textured_as(name, &mut output, &mut textures);
 					} else {
 						// save multiple meshes with the different textures
+						//println!("level {level_index} splitting mesh {name}");
 						for (src, dest) in &mesh_arenas {
 							if src != dest {
 								continue;
@@ -504,9 +500,10 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 				if used_textures.contains_key(name) {
 					continue;
 				}
-
+				// find all arenas that use this texture so we can split its palettes
 				temp_arenas.clear();
-				// find palettes
+
+				// find source mtos and use their palette
 				'outer: for arena in &mto.arenas {
 					for (mti_name, _) in &arena.mti.materials {
 						if name == *mti_name {
@@ -515,40 +512,51 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 						}
 					}
 				}
-				if temp_arenas.is_empty() {
-					// try all palettes
-					temp_arenas.extend(palettes.keys().map(|arena| (*arena, *arena)));
-					temp_arenas.sort_unstable();
-				}
 
-				let num_unique = filter_textures(tex, &palettes, &mut temp_arenas);
+				if temp_arenas.is_empty() {
+					if name == "PICKUPS_8" {
+						// bones pickup, only used in GUNT_10
+						let last_arena = mto.arenas.last().unwrap().name;
+						temp_arenas.push((last_arena, last_arena));
+					} else {
+						// try all palettes
+						//println!("level {level_index} texture {name} can't find arena");
+						temp_arenas.extend(palettes.keys().map(|arena| (*arena, *arena)));
+						temp_arenas.sort_unstable();
+						filter_textures(tex, &palettes, &mut temp_arenas);
+						temp_arenas.retain(|(a, b)| a == b);
+					}
+				}
 
 				let output = if tex.len() == 1 {
 					&mut tex_output
 				} else {
 					&mut anim_output
 				};
-				if num_unique == 1 {
+
+				let unique_pal = temp_arenas.len() == 1;
+				let fps = 24;
+				if unique_pal {
 					Texture::save_animated(
 						tex,
 						name,
-						24,
+						fps,
 						output,
 						Some(&palettes[temp_arenas[0].0]),
 					);
 				} else {
-					for (arena_src, arena_dest) in temp_arenas.iter() {
-						if arena_src == arena_dest {
-							temp_filename.clear();
-							write!(temp_filename, "{name}_{arena_src}").unwrap();
-							Texture::save_animated(
-								tex,
-								&temp_filename,
-								24,
-								output,
-								Some(&palettes[arena_src]),
-							);
-						}
+					// save all copies
+					//println!("level {level_index} splitting other texture {name}");
+					for (arena, _) in &temp_arenas {
+						temp_filename.clear();
+						write!(temp_filename, "{name}_{arena}").unwrap();
+						Texture::save_animated(
+							tex,
+							&temp_filename,
+							fps,
+							output,
+							Some(&palettes[arena]),
+						);
 					}
 				}
 			}

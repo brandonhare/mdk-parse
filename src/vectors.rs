@@ -163,6 +163,23 @@ impl Sub for Vec3 {
 		}
 	}
 }
+impl MulAssign for Vec3 {
+	fn mul_assign(&mut self, rhs: Vec3) {
+		self.x *= rhs.x;
+		self.y *= rhs.y;
+		self.z *= rhs.z;
+	}
+}
+impl Mul for Vec3 {
+	type Output = Vec3;
+	fn mul(self, rhs: Vec3) -> Self::Output {
+		Vec3 {
+			x: self.x * rhs.x,
+			y: self.y * rhs.y,
+			z: self.z * rhs.z,
+		}
+	}
+}
 impl MulAssign<f32> for Vec3 {
 	fn mul_assign(&mut self, rhs: f32) {
 		self.x *= rhs;

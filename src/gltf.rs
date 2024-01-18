@@ -461,7 +461,7 @@ impl Gltf {
 	pub fn create_texture_material_embedded(
 		&mut self, name: String, data: &[u8], alpha_mode: Option<AlphaMode>,
 	) -> MaterialIndex {
-		self.create_texture_material_ref(name, to_uri(data), alpha_mode)
+		self.create_texture_material_ref(name, to_uri_mime(data, "image/png"), alpha_mode)
 	}
 
 	#[must_use]
@@ -774,8 +774,11 @@ fn make_cube(scale: f32) -> ([Vec3; 8], [u16; 36]) {
 }
 
 fn to_uri(data: &[u8]) -> String {
-	let mut result = "data:application/octet-stream;base64,".to_owned();
+	to_uri_mime(data, "application/octet-stream")
+}
+fn to_uri_mime(data: &[u8], mime: &str) -> String {
 	use base64::{engine::general_purpose, Engine};
+	let mut result = format!("data:{mime};base64,");
 	general_purpose::STANDARD.encode_string(data, &mut result);
 	result
 }

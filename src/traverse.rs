@@ -6,12 +6,12 @@ use crate::data_formats::{
 };
 use crate::file_formats::{
 	mti::{Material, Mti, Pen},
-	Bni, Cmi, Dti, Mto, Sni,
+	Bni, Cmi, Dti, Fti, Mto, Sni,
 };
 use crate::{output_writer::OutputWriter, reader::Reader};
 
 fn filter_textures<'a>(
-	frames: &[Texture], palettes: &HashMap<&str, Vec<u8>>, arenas: &mut Vec<(&'a str, &'a str)>,
+	frames: &[Texture], palettes: &HashMap<String, Vec<u8>>, arenas: &mut Vec<(&'a str, &'a str)>,
 ) -> usize {
 	if arenas.len() == 1 {
 		return 1;
@@ -20,7 +20,8 @@ fn filter_textures<'a>(
 	filter_colours(colour_map, palettes, arenas)
 }
 fn filter_colours<'a>(
-	colour_map: ColourMap, palettes: &HashMap<&str, Vec<u8>>, arenas: &mut Vec<(&'a str, &'a str)>,
+	colour_map: ColourMap, palettes: &HashMap<String, Vec<u8>>,
+	arenas: &mut Vec<(&'a str, &'a str)>,
 ) -> usize {
 	if arenas.len() == 1 {
 		return 1;
@@ -45,7 +46,7 @@ fn filter_colours<'a>(
 			if arena2_src != arena2_dest {
 				continue;
 			}
-			let pal2 = &palettes[arena2_src];
+			let pal2 = &palettes[*arena2_src];
 			if colour_map.compare(pal1, pal2) {
 				arenas[i].1 = *arena2_src;
 				num_unique -= 1;
@@ -57,32 +58,20 @@ fn filter_colours<'a>(
 }
 
 pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool) {
-	// save shared sounds
-	if save_sounds {
-		let trav_sni = std::fs::read("assets/TRAVERSE/TRAVERSE.SNI").unwrap();
-		let trav_sni = Sni::parse(Reader::new(&trav_sni));
-		let mut output = OutputWriter::new("assets/TRAVERSE/Sounds", true);
-		for (name, sound) in &trav_sni.sounds {
-			sound.save_as(name, &mut output);
-		}
-		assert!(
-			trav_sni.anims.is_empty(),
-			"traverse.sni contained unexpected animations"
-		);
-		assert!(
-			trav_sni.bsps.is_empty(),
-			"traverse.sni contained unexpected bsps"
-		);
-	}
+	let sys_pal = {
+		let fti = std::fs::read("assets/MISC/mdkfont.fti").unwrap();
+		let fti = Fti::parse(Reader::new(&fti));
+		fti.palette.to_owned()
+	};
 
 	let trav_bni = std::fs::read("assets/TRAVERSE/TRAVSPRT.BNI").unwrap();
 	let trav_bni = Bni::parse(Reader::new(&trav_bni));
 
-	let pickups_names: [String; 9] = std::array::from_fn(|i| format!("PICKUPS_{i}"));
+	let mut all_palettes: HashMap<String, Vec<u8>> = Default::default();
 
 	let mut temp_filename = String::new();
 
-	for level_index in 3..=8 {
+	for level_index in 3usize..=8 {
 		temp_filename.clear();
 		write!(temp_filename, "assets/TRAVERSE/LEVEL{level_index}").unwrap();
 		let output = OutputWriter::new(&temp_filename, true);
@@ -118,28 +107,7 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 		let mut all_pens = HashMap::<&str, Pen>::new();
 		let mut all_textures = HashMap::<&str, &[Texture]>::new();
 
-		let mut palettes = HashMap::<&str, Vec<u8>>::new();
-
-		all_meshes.extend(trav_bni.meshes.iter().map(|(name, mesh)| (*name, mesh)));
-
-		// todo bni textures aren't used by anything in the levels directly, save them separately
-		all_textures.extend(
-			trav_bni
-				.textures
-				.iter()
-				.map(|(name, tex)| (*name, std::slice::from_ref(tex))),
-		);
-		all_textures.extend(
-			trav_bni
-				.animations_2d
-				.iter()
-				.map(|(name, frames)| (*name, frames.as_slice())),
-		);
-
-		// split pickups animation
-		for (i, frame) in all_textures.remove("PICKUPS").unwrap().iter().enumerate() {
-			all_textures.insert(&pickups_names[i], std::slice::from_ref(frame));
-		}
+		let mut palettes = HashMap::<String, Vec<u8>>::new();
 
 		if save_sounds {
 			all_sounds.extend(sni_o.sounds.iter().map(|(name, sound)| (*name, sound)));
@@ -201,12 +169,13 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 
 				let num_free_palette_bytes = dti.num_pal_free_pixels as usize * 3;
 				let mut palette = dti.pal.to_vec();
+				palette[..192].copy_from_slice(&sys_pal);
 				palette[4 * 16 * 3..4 * 16 * 3 + num_free_palette_bytes]
 					.copy_from_slice(&arena.palette[..num_free_palette_bytes]);
 				if save_textures {
 					palette_output.write_palette(arena.name, &palette);
 				}
-				palettes.insert(arena.name, palette);
+				palettes.insert(arena.name.to_owned(), palette);
 
 				// add materials
 				for (name, mat) in arena.mti.materials.iter() {
@@ -234,7 +203,7 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 			if entity.arenas == [*corridor_name] {
 				// referenced in cmi, add a new palette
 				let pal = palettes.get(arena_name).unwrap();
-				palettes.insert(corridor_name, pal.clone());
+				palettes.insert(corridor_name.to_string(), pal.clone());
 			} else {
 				// not referenced anywhere, add to parent arena
 				all_meshes.insert(*corridor_name, &bsp.mesh);
@@ -251,7 +220,7 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 
 		// save sounds
 		if save_sounds {
-			let mut output = output.push_dir("Sounds");
+			let output = output.push_dir("Sounds");
 			for arena in &mto.arenas {
 				let song = cmi
 					.arenas
@@ -262,21 +231,20 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 				if song.is_none() && arena.sounds.is_empty() {
 					continue;
 				}
-				let mut output = output.push_dir(arena.name);
+				let mut arena_output = output.push_dir(arena.name);
 				if let Some((song_name, song)) = song {
-					song.save_as(song_name, &mut output);
+					song.save_as(song_name, &mut arena_output);
 				}
 
 				for (name, sound) in &arena.sounds {
-					sound.save_as(name, &mut output);
+					sound.save_as(name, &mut arena_output);
 				}
 			}
 
+			let mut shared_output = output.push_dir("Shared");
 			for (name, sound) in all_sounds.iter() {
-				sound.save_as(name, &mut output);
+				sound.save_as(name, &mut shared_output);
 			}
-		} else {
-			debug_assert!(all_sounds.is_empty());
 		}
 
 		let mut used_textures = HashMap::<&str, Vec<(&str, &str)>>::new();
@@ -295,10 +263,11 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 
 					for &tex_name in mesh.materials.iter() {
 						if all_textures.contains_key(tex_name) {
-							used_textures
-								.entry(tex_name)
-								.or_default()
-								.extend(palettes.keys().map(|arena| (*arena, *arena)));
+							used_textures.entry(tex_name).or_default().extend(
+								palettes
+									.keys()
+									.map(|arena| (arena.as_str(), arena.as_str())),
+							);
 						} else if !all_pens.contains_key(tex_name) {
 							//println!("level {level_index} mesh {name} missing material {tex_name}"); // todo
 						}
@@ -340,7 +309,7 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 						);
 					} else {
 						//println!("level {level_index} splitting mesh texture {name}");
-						for (arena_src, arena_dest) in arenas.iter() {
+						for &(arena_src, arena_dest) in arenas.iter() {
 							if arena_src == arena_dest {
 								temp_filename.clear();
 								write!(temp_filename, "{name}_{arena_src}").unwrap();
@@ -495,6 +464,9 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 			let mut anim_output = output.push_dir("Animations");
 
 			dti.skybox.save_as("Sky", &mut tex_output, Some(dti.pal));
+			if let Some(sky) = &dti.reflected_skybox {
+				sky.save_as("Reflection", &mut tex_output, Some(dti.pal));
+			}
 
 			for (&name, tex) in all_textures.iter() {
 				if used_textures.contains_key(name) {
@@ -514,18 +486,16 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 				}
 
 				if temp_arenas.is_empty() {
-					if name == "PICKUPS_8" {
-						// bones pickup, only used in GUNT_10
-						let last_arena = mto.arenas.last().unwrap().name;
-						temp_arenas.push((last_arena, last_arena));
-					} else {
-						// try all palettes
-						//println!("level {level_index} texture {name} can't find arena");
-						temp_arenas.extend(palettes.keys().map(|arena| (*arena, *arena)));
-						temp_arenas.sort_unstable();
-						filter_textures(tex, &palettes, &mut temp_arenas);
-						temp_arenas.retain(|(a, b)| a == b);
-					}
+					// try all palettes
+					//println!("level {level_index} texture {name} can't find arena");
+					temp_arenas.extend(
+						palettes
+							.keys()
+							.map(|arena| (arena.as_str(), arena.as_str())),
+					);
+					temp_arenas.sort_unstable();
+					filter_textures(tex, &palettes, &mut temp_arenas);
+					temp_arenas.retain(|(a, b)| a == b);
 				}
 
 				let output = if tex.len() == 1 {
@@ -547,7 +517,7 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 				} else {
 					// save all copies
 					//println!("level {level_index} splitting other texture {name}");
-					for (arena, _) in &temp_arenas {
+					for &(arena, _) in &temp_arenas {
 						temp_filename.clear();
 						write!(temp_filename, "{name}_{arena}").unwrap();
 						Texture::save_animated(
@@ -558,6 +528,89 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 							Some(&palettes[arena]),
 						);
 					}
+				}
+			}
+		}
+
+		all_palettes.extend(palettes);
+	}
+
+	let shared_output = OutputWriter::new("assets/TRAVERSE/Shared/", true);
+	if save_sounds {
+		let trav_sni = std::fs::read("assets/TRAVERSE/TRAVERSE.SNI").unwrap();
+		let trav_sni = Sni::parse(Reader::new(&trav_sni));
+		let mut output = shared_output.push_dir("Sounds");
+		for (name, sound) in &trav_sni.sounds {
+			sound.save_as(name, &mut output);
+		}
+		assert!(
+			trav_sni.anims.is_empty(),
+			"traverse.sni contained unexpected animations"
+		);
+		assert!(
+			trav_sni.bsps.is_empty(),
+			"traverse.sni contained unexpected bsps"
+		);
+	}
+
+	if save_textures {
+		let mut temp_arenas = Vec::new();
+		let mut tex_output = shared_output.push_dir("Textures");
+		let mut anim_output = shared_output.push_dir("Animations");
+		let mut temp_name = String::new();
+
+		for (name, frames) in trav_bni
+			.textures
+			.iter()
+			.map(|(name, tex)| (*name, std::slice::from_ref(tex)))
+			.chain(
+				trav_bni
+					.animations_2d
+					.iter()
+					.map(|(name, frames)| (*name, frames.as_slice())),
+			) {
+			if name == "PICKUPS" {
+				let pal = all_palettes["GUNT_10"].as_slice();
+				for (i, tex) in frames.iter().enumerate() {
+					temp_name.clear();
+					write!(temp_name, "PICKUPS_{i}").unwrap();
+					tex.save_as(&temp_name, &mut tex_output, Some(pal));
+				}
+				continue;
+			}
+
+			let output = if frames.len() == 1 {
+				&mut tex_output
+			} else {
+				&mut anim_output
+			};
+
+			temp_arenas.clear();
+			temp_arenas.extend(all_palettes.keys().map(|k| (k.as_str(), k.as_str())));
+			temp_arenas.sort_unstable();
+			let num_unique = filter_textures(frames, &all_palettes, &mut temp_arenas);
+			if num_unique == 1 || name == "K_LOOKD" {
+				Texture::save_animated(
+					frames,
+					name,
+					24,
+					output,
+					all_palettes.get(temp_arenas[0].0).map(Vec::as_slice),
+				);
+			} else {
+				for &(pal, pal2) in &temp_arenas {
+					if pal != pal2 {
+						continue;
+					}
+					temp_name.clear();
+					write!(temp_name, "{name}_{pal}").unwrap();
+					Texture::save_animated(
+						frames,
+						&temp_name,
+						24,
+						output,
+						all_palettes.get(pal).map(Vec::as_slice),
+					);
 				}
 			}
 		}

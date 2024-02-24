@@ -14,6 +14,31 @@ pub struct Bni<'a> {
 	pub unknowns: Vec<(&'a str, &'a [u8])>,
 }
 
+impl<'a> std::fmt::Debug for Bni<'a> {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		struct Named<'a, T>(&'a [(&'a str, T)]);
+		impl<'a, T> std::fmt::Debug for Named<'a, T> {
+			fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+				f.debug_list()
+					.entries(self.0.iter().map(|(name, _)| *name))
+					.finish()
+			}
+		}
+
+		f.debug_struct("Bni")
+			.field("sounds", &Named(&self.sounds))
+			.field("textures", &Named(&self.textures))
+			.field("coloured_textures", &Named(&self.coloured_textures))
+			.field("animations_2d", &Named(&self.animations_2d))
+			.field("animations_3d", &Named(&self.animations_3d))
+			.field("meshes", &Named(&self.meshes))
+			.field("palettes", &Named(&self.palettes))
+			.field("strings", &Named(&self.strings))
+			.field("unknowns", &Named(&self.unknowns))
+			.finish()
+	}
+}
+
 impl<'a> Bni<'a> {
 	pub fn parse(mut file_reader: Reader<'a>) -> Self {
 		let filesize = file_reader.u32() + 4;

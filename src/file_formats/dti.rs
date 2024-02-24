@@ -8,6 +8,7 @@ pub struct Dti<'a> {
 	pub player_start_angle: f32,
 	pub sky_info: SkyInfo,
 	pub skybox: Texture<'a>,
+	pub reflected_skybox: Option<Texture<'a>>,
 	pub translucent_colours: [[u8; 4]; 4],
 
 	pub arenas: Vec<DtiArena<'a>>,
@@ -221,22 +222,38 @@ impl<'a> Dti<'a> {
 		}
 
 		// skybox
-		let skybox = {
+		let (skybox, reflected_skybox) = {
 			data.set_position(skybox_offset);
 			let src_width = sky_width as usize + 4;
-			let src_height = if sky_info.reflected_top_colour >= 0 {
-				sky_height * 2
-			} else {
-				sky_height
-			} as usize;
+			let src_height = sky_height as usize;
 			let sky_pixels = data.slice(src_width * src_height);
+
+			// trim extra 4 pixels
 			let mut pixels = Vec::with_capacity(sky_width as usize * src_height);
 			for row in sky_pixels.chunks_exact(src_width) {
 				pixels.extend(&row[..sky_width as usize]);
 			}
+
 			let mut skybox = Texture::new(sky_width as u16, src_height as u16, pixels);
 			skybox.position = (sky_x as i16, sky_y as i16);
-			skybox
+
+			let reflected_skybox = if sky_info.reflected_top_colour >= 0 {
+				let sky_pixels = data.slice(src_width * src_height);
+
+				// trim extra 4 pixels
+				let mut pixels = Vec::with_capacity(sky_width as usize * src_height);
+				for row in sky_pixels.chunks_exact(src_width) {
+					pixels.extend(&row[..sky_width as usize]);
+				}
+
+				let mut skybox = Texture::new(sky_width as u16, src_height as u16, pixels);
+				skybox.position = (sky_x as i16, sky_y as i16);
+				Some(skybox)
+			} else {
+				None
+			};
+
+			(skybox, reflected_skybox)
 		};
 
 		let filename_footer = data.str(12);
@@ -250,6 +267,7 @@ impl<'a> Dti<'a> {
 			player_start_angle,
 			sky_info,
 			skybox,
+			reflected_skybox,
 			translucent_colours,
 			arenas,
 			num_pal_free_pixels,

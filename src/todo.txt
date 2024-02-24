@@ -7,14 +7,11 @@ traverse other output? splines? scripts? reports?
 traverse unused meshes/textures?
 hide backface outlines
 fix shiny z-fighting
-some wrong colours
 calculate exact sky and shiny offsets
 find unknown mesh material -1028
 other mesh material types
-split bni shared assets
 fall3d animation fps
 fall3d colours (zoom, flare)
 fall3d dedup shared assets
 misc
 make texture holder return full frames and path by ref
-split traverse shared assets (bni)

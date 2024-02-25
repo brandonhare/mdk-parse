@@ -252,38 +252,33 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 		// save meshes/textures
 		{
 			let mut output = output.push_dir("Meshes");
+			// gather materials
 			for (&name, mesh) in all_meshes.iter() {
-				let Some(arenas) = cmi
+				let mesh_arenas = cmi
 					.entities
 					.get(name)
-					.map(|entity| &entity.arenas)
-					.filter(|a| !a.is_empty())
-				else {
+					.map(|entity| entity.arenas.as_slice())
+					.filter(|a| !a.is_empty());
+
+				if mesh_arenas.is_none() {
 					//println!("level {level_index} mesh {name} not in any arenas"); // todo
-
-					for &tex_name in mesh.materials.iter() {
-						if all_textures.contains_key(tex_name) {
-							used_textures.entry(tex_name).or_default().extend(
-								palettes
-									.keys()
-									.map(|arena| (arena.as_str(), arena.as_str())),
-							);
-						} else if !all_pens.contains_key(tex_name) {
-							//println!("level {level_index} mesh {name} missing material {tex_name}"); // todo
-						}
-					}
-
-					continue;
-				};
+				}
 
 				for &tex_name in mesh.materials.iter() {
 					if all_textures.contains_key(tex_name) {
-						used_textures
-							.entry(tex_name)
-							.or_default()
-							.extend(arenas.iter().map(|arena| (*arena, *arena)));
+						let used = used_textures.entry(tex_name).or_default();
+						if let Some(mesh_arenas) = mesh_arenas {
+							used.extend(mesh_arenas.iter().map(|&arena| (arena, arena)));
+						} else {
+							used.extend(
+								palettes
+									.keys()
+									.map(String::as_str)
+									.map(|arena| (arena, arena)),
+							);
+						}
 					} else if !all_pens.contains_key(tex_name) {
-						//println!("level {level_index} mesh {name} missing material {tex_name}"); // todo
+						println!("level {level_index} mesh {name} missing material {tex_name}"); // todo
 					}
 				}
 			}

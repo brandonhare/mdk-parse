@@ -1,7 +1,8 @@
+#![allow(unused)]
 use std::fmt::Write;
 
 use crate::data_formats::image_formats::ColourMap;
-use crate::data_formats::{Texture, TextureHolder, TextureResult};
+use crate::data_formats::{mesh, ResolvedMaterial, Texture};
 use crate::file_formats::mti::Material;
 use crate::file_formats::{Bni, Mti, Sni};
 use crate::output_writer::OutputWriter;
@@ -81,23 +82,24 @@ pub fn parse_fall3d(save_sounds: bool, save_textures: bool, save_meshes: bool) {
 			output.write_palette(&temp_filename, palette);
 		}
 
+		/*
 		struct Textures<'a> {
 			palette: &'a [u8],
 			materials: &'a [(&'a str, Material<'a>)],
 		}
 		impl<'a> TextureHolder<'a> for Textures<'a> {
-			fn lookup(&mut self, name: &str) -> TextureResult<'a> {
+			fn lookup(&mut self, name: &str) -> ResolvedMaterial<'a> {
 				for (mat_name, mat) in self.materials {
 					if *mat_name == name {
 						return match mat {
-							Material::Pen(pen) => TextureResult::Pen(*pen),
-							Material::Texture(tex, _) => TextureResult::SaveRef {
+							Material::Pen(pen) => ResolvedMaterial::Pen(*pen),
+							Material::Texture(tex, _) => ResolvedMaterial::TextureRef {
 								width: tex.width,
 								height: tex.height,
 								path: format!("Textures/{name}.png"),
 								masked: tex.pixels.iter().any(|p| *p == 0),
 							},
-							Material::AnimatedTexture(frames, _) => TextureResult::SaveRef {
+							Material::AnimatedTexture(frames, _) => ResolvedMaterial::TextureRef {
 								width: frames[0].width,
 								height: frames[0].height,
 								path: format!("Textures/{name}.png"),
@@ -109,7 +111,7 @@ pub fn parse_fall3d(save_sounds: bool, save_textures: bool, save_meshes: bool) {
 					}
 				}
 				//eprintln!("failed to find fall3d material {name}"); // todo
-				TextureResult::None
+				ResolvedMaterial::None
 			}
 			fn get_used_colours(&self, _name: &str, _colours: &mut ColourMap) {
 				eprintln!("not getting used colours in fall3d");
@@ -133,11 +135,12 @@ pub fn parse_fall3d(save_sounds: bool, save_textures: bool, save_meshes: bool) {
 				materials: &[],
 			}
 		};
+		*/
 
 		if save_meshes {
 			let mut output = output.push_dir("Meshes");
 			for (name, mesh) in &bni.meshes {
-				mesh.save_textured_as(name, &mut output, &mut textures);
+				mesh.save_as(name, &mut output, None, &[]); // todo materials, animations
 			}
 		}
 

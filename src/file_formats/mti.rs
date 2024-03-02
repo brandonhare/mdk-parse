@@ -13,17 +13,16 @@ pub enum Pen {
 	Colour(u8),      // index into palette
 	Translucent(u8), // index into dti translucent_colours
 	Shiny(u8),       // todo
-	Unknown(i32),    // todo
+	Unknown(i16),    // todo
 }
 impl Pen {
-	pub fn new(index: i32) -> Pen {
+	pub fn new(index: i16) -> Pen {
 		match index {
 			0..=255 => Pen::Texture(index as u8),
 			-255..=-1 => Pen::Colour(-index as u8),
 			-1010..=-990 => Pen::Shiny((-990 - index) as u8),
 			-1027..=-1024 => Pen::Translucent((-1024 - index) as u8),
-			..=-1028 => Pen::Unknown(index), // todo
-			_ => Pen::Unknown(index),        // todo
+			n => Pen::Unknown(n), // todo
 		}
 	}
 }
@@ -63,16 +62,17 @@ impl<'a> Mti<'a> {
 
 			if flags == 0xFFFFFFFF {
 				// pen
-				let pen_value = match reader.i32() {
+				let pen_value = reader.i16();
+				let pen = match pen_value {
 					0 => Pen::Colour(0),
 					n @ 1.. => Pen::new(-n), // negate to match mesh tri values
 					n => Pen::Unknown(n),    // todo negative?
 				};
-
-				let padding1 = reader.u32(); // padding
+				materials.push((name, Material::Pen(pen)));
+				let padding0 = reader.u16();
+				let padding1 = reader.u32();
 				let padding2 = reader.u32();
-				assert!(padding1 == 0 && padding2 == 0);
-				materials.push((name, Material::Pen(pen_value)));
+				assert!(padding0 == 0 && padding1 == 0 && padding2 == 0);
 				continue;
 			}
 

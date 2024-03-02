@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(unused, clippy::needless_lifetimes)]
 #![warn(trivial_casts, trivial_numeric_casts, future_incompatible)]
 use std::path::Path;
 
@@ -191,11 +192,12 @@ fn main() {
 
 	let start_time = std::time::Instant::now();
 
-	let save_sounds = true;
+	let save_sounds = false;
 	let save_textures = true;
 	let save_meshes = true;
+	let save_anims = true;
 	//stream::parse_stream(save_sounds, save_textures, save_meshes);
-	traverse::parse_traverse(save_sounds, save_textures, save_meshes);
+	traverse::parse_traverse(save_sounds, save_textures, save_meshes, save_anims);
 	//fall3d::parse_fall3d(save_sounds, save_textures, save_meshes);
 
 	//for_all_ext("assets", "dti", parse_dti);

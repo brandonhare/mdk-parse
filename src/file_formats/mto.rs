@@ -73,7 +73,7 @@ impl<'a> Mto<'a> {
 					let mut mesh_reader = subfile_reader.resized(offset..);
 					let is_multimesh = mesh_reader.u32();
 					assert!(is_multimesh <= 1, "invalid multimesh value");
-					let mesh = Mesh::parse(&mut mesh_reader, is_multimesh != 0);
+					let mesh = Mesh::parse(&mut mesh_reader, name, is_multimesh != 0);
 					meshes.push((name, mesh));
 				}
 				for _ in 0..num_sounds {
@@ -102,7 +102,7 @@ impl<'a> Mto<'a> {
 
 			// parse bsp
 			arena_reader.set_position(bsp_offset);
-			let bsp = Bsp::parse(&mut arena_reader);
+			let bsp = Bsp::parse(&mut arena_reader, arena_name);
 
 			// output matfile
 			let mti = Mti::parse(arena_reader.resized(matfile_offset..));
@@ -138,7 +138,7 @@ impl<'a> Mto<'a> {
 			if !arena.meshes.is_empty() {
 				let mut output = output.push_dir("meshes");
 				for (name, mesh) in &arena.meshes {
-					mesh.save_as(name, &mut output);
+					mesh.save_as(name, &mut output, None, &[]); // todo animations, materials
 				}
 			}
 			if !arena.sounds.is_empty() {
@@ -150,7 +150,7 @@ impl<'a> Mto<'a> {
 				output.write("sounds", "tsv", &sound_summary);
 			}
 
-			arena.bsp.save_as(arena.name, &mut output);
+			arena.bsp.save_as(arena.name, &mut output, None); // todo materials
 
 			output.write_palette("PAL", arena.palette);
 

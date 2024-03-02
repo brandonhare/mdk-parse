@@ -1,4 +1,5 @@
-use crate::data_formats::{image_formats::ColourMap, Texture, TextureHolder, TextureResult};
+#![allow(unused)]
+use crate::data_formats::{image_formats::ColourMap, mesh, ResolvedMaterial, Texture};
 use crate::file_formats::{
 	mti::{Material, Mti, Pen},
 	Bni,
@@ -7,6 +8,7 @@ use crate::{OutputWriter, Reader};
 use std::fmt::Write;
 
 pub fn parse_stream(save_sounds: bool, save_textures: bool, save_meshes: bool) {
+	/*
 	let bni = std::fs::read("assets/STREAM/STREAM.BNI").unwrap();
 	let bni = Bni::parse(Reader::new(&bni));
 	let mti = std::fs::read("assets/STREAM/STREAM.MTI").unwrap();
@@ -29,6 +31,7 @@ pub fn parse_stream(save_sounds: bool, save_textures: bool, save_meshes: bool) {
 		}
 	}
 
+	/*
 	struct StreamTextures<'a> {
 		bni_textures: &'a [(&'a str, Texture<'a>)],
 		mti_materials: &'a [(&'a str, Material<'a>)],
@@ -36,7 +39,7 @@ pub fn parse_stream(save_sounds: bool, save_textures: bool, save_meshes: bool) {
 		used_textures: Vec<&'a str>,
 	}
 	impl<'a> TextureHolder<'a> for StreamTextures<'a> {
-		fn lookup(&mut self, name: &str) -> TextureResult<'a> {
+		fn lookup(&mut self, name: &str) -> ResolvedMaterial<'a> {
 			let name = &name[..name.len().min(8)]; // truncated material names
 			let mut result_name: Option<&'a str> = None;
 			let mut width = 0;
@@ -47,7 +50,7 @@ pub fn parse_stream(save_sounds: bool, save_textures: bool, save_meshes: bool) {
 					continue;
 				}
 				match mat {
-					Material::Pen(pen) => return TextureResult::Pen(*pen),
+					Material::Pen(pen) => return ResolvedMaterial::Pen(*pen),
 					Material::Texture(tex, _) => {
 						width = tex.width;
 						height = tex.height;
@@ -86,11 +89,11 @@ pub fn parse_stream(save_sounds: bool, save_textures: bool, save_meshes: bool) {
 			let Some(name) = result_name else {
 				// todo
 				//println!("failed to find stream material {name}");
-				return TextureResult::None;
+				return ResolvedMaterial::None;
 			};
 
 			self.used_textures.push(name);
-			TextureResult::SaveRef {
+			ResolvedMaterial::TextureRef {
 				width,
 				height,
 				path: format!("Textures/{name}.png"),
@@ -134,23 +137,18 @@ pub fn parse_stream(save_sounds: bool, save_textures: bool, save_meshes: bool) {
 		palette,
 		used_textures: Vec::new(),
 	};
+	*/
 
 	if save_meshes {
 		let mut output = output.push_dir("Meshes");
 		for (name, mesh) in &bni.meshes {
-			mesh.save_textured_as(name, &mut output, &mut textures);
+			mesh.save_as(name, &mut output, None, &[]); // todo materials, animations
 		}
+		/*
 		let mut output = output.push_dir("Animations");
 		for (name, anim) in bni.animations_3d {
 			anim.save_as(name, &mut output);
-		}
-	} else {
-		// gather textures to save
-		for (_, mesh) in bni.meshes {
-			for name in &mesh.materials {
-				textures.lookup(name);
-			}
-		}
+		}*/
 	}
 
 	if save_textures {
@@ -188,4 +186,6 @@ pub fn parse_stream(save_sounds: bool, save_textures: bool, save_meshes: bool) {
 
 	//bni.save(&mut output);
 	//mti.save(&mut output.push_dir("textures"), Some(palette));
+
+	*/
 }

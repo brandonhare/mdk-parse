@@ -62,6 +62,10 @@ impl Vec3 {
 		}
 		[min, max]
 	}
+
+	pub fn is_zero(&self) -> bool {
+		*self == Default::default()
+	}
 }
 
 impl From<[f32; 3]> for Vec3 {

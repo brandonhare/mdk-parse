@@ -123,11 +123,11 @@ impl<'a> Bni<'a> {
 			}
 
 			// meshes
-			if let Some(mesh) = Mesh::try_parse(&mut reader.clone(), false) {
+			if let Some(mesh) = Mesh::try_parse(&mut reader.clone(), name, false) {
 				meshes.push((name, mesh));
 				continue;
 			}
-			if let Some(mesh) = Mesh::try_parse(&mut reader.clone(), true) {
+			if let Some(mesh) = Mesh::try_parse(&mut reader.clone(), name, true) {
 				meshes.push((name, mesh));
 				continue;
 			}
@@ -247,7 +247,7 @@ impl<'a> Bni<'a> {
 		);
 
 		save_items("meshes", output, &self.meshes, |name, mesh, output| {
-			mesh.save_as(name, output)
+			mesh.save_as(name, output, None, &[])
 		});
 
 		save_items("palettes", output, &self.palettes, |name, pal, output| {

@@ -1,12 +1,15 @@
 use crate::{gltf, OutputWriter, Reader, Vec3};
 
+use super::mesh::REFERENCE_POINTS_NAME;
+
+#[derive(PartialEq)]
 pub struct Animation<'a> {
 	pub speed: f32,
 	pub target_vectors: Vec<Vec3>, // todo what exactly are these?
-	pub reference_points: Vec<Vec<Vec3>>,
 	pub parts: Vec<AnimationPart<'a>>,
 }
 
+#[derive(PartialEq)]
 pub struct AnimationPart<'a> {
 	pub name: &'a str,
 	pub point_paths: Vec<Vec<Vec3>>,
@@ -131,9 +134,20 @@ impl<'a> Animation<'a> {
 			return None;
 		}
 		let mut reference_points: Vec<Vec<Vec3>> = Vec::with_capacity(num_reference_points);
+		let mut any_ref_point = false;
 		for _ in 0..num_reference_points {
 			let points_path = Vec3::swizzle_vec(data.try_get_vec::<Vec3>(num_frames)?);
+			if !any_ref_point && points_path.iter().any(|vec| *vec == Default::default()) {
+				any_ref_point = true;
+			}
 			reference_points.push(points_path);
+		}
+
+		if any_ref_point {
+			parts.push(AnimationPart {
+				name: REFERENCE_POINTS_NAME,
+				point_paths: reference_points,
+			});
 		}
 
 		max_pos = max_pos.max(data.position());
@@ -142,7 +156,6 @@ impl<'a> Animation<'a> {
 		Some(Animation {
 			speed,
 			target_vectors,
-			reference_points,
 			parts,
 		})
 	}
@@ -155,18 +168,21 @@ impl<'a> Animation<'a> {
 		self.target_vectors.len()
 	}
 
-	pub fn save_as(&self, name: &str, output: &mut OutputWriter) {
+	pub fn add_to_gltf(
+		&self, gltf: &mut gltf::Gltf, name: &str,
+		part_joints: &[(&str, std::ops::Range<gltf::NodeIndex>)], cache: &mut Vec<Vec3>,
+	) {
 		let num_frames = self.num_frames();
 
 		let fps = 30.0;
 
-		let mut gltf = gltf::Gltf::new(name.into());
-		let cube_mesh = Some(gltf.get_cube_mesh());
+		//let cube_mesh = Some(gltf.get_cube_mesh());
 		let animation = gltf.create_animation(name.into());
-		let root_node = gltf.get_root_node();
 		let base_timestamps = gltf.create_animation_timestamps(num_frames, fps / self.speed);
 		let interpolation = Some(gltf::AnimationInterpolationMode::Step);
 
+		// todo target vectors
+		/*
 		if self.target_vectors.iter().any(|p| *p != Vec3::default()) {
 			let node = gltf.create_child_node(root_node, "Target Vectors".into(), cube_mesh);
 			gltf.add_animation_translation(
@@ -177,32 +193,70 @@ impl<'a> Animation<'a> {
 				interpolation,
 			);
 		}
+		*/
 
-		if self
-			.reference_points
-			.iter()
-			.any(|p| p.iter().any(|p| *p != Vec3::default()))
-		{
-			let ref_node = gltf.create_child_node(root_node, "Reference Points".into(), None);
-			for (i, path) in self.reference_points.iter().enumerate() {
-				let node = gltf.create_child_node(ref_node, i.to_string(), cube_mesh);
+		for part in &self.parts {
+			let Some((_, joint_nodes)) = part_joints
+				.iter()
+				.find(|(joint_name, _)| part.name == *joint_name)
+			else {
+				continue;
+			};
+
+			for (target_node, path) in (joint_nodes.start.0..joint_nodes.end.0)
+				.map(gltf::NodeIndex)
+				.zip(part.point_paths.iter())
+			{
+				let node_pos = gltf.get_node_position(target_node);
+				cache.clear();
+				cache.extend(path.iter().map(|pos| *pos - node_pos));
 				gltf.add_animation_translation(
 					animation,
-					node,
+					target_node,
 					base_timestamps,
-					path,
+					cache,
 					interpolation,
 				);
 			}
 		}
+	}
+
+	pub fn save_as(&self, name: &str, output: &mut OutputWriter) {
+		let num_frames = self.num_frames();
+
+		let fps = 30.0;
+
+		let mut gltf = gltf::Gltf::new(name.into());
+		let cube_mesh = Some(gltf.get_cube_mesh());
+		let animation = gltf.create_animation(name.into());
+		let base_timestamps = gltf.create_animation_timestamps(num_frames, fps / self.speed);
+		let interpolation = Some(gltf::AnimationInterpolationMode::Step);
+
+		if self.target_vectors.iter().any(|p| *p != Vec3::default()) {
+			let node = gltf.create_root_node("Target Vectors".into(), cube_mesh);
+			gltf.add_animation_translation(
+				animation,
+				node,
+				base_timestamps,
+				&self.target_vectors,
+				interpolation,
+			);
+		}
 
 		for part in &self.parts {
-			let part_node = gltf.create_child_node(root_node, part.name.into(), None);
+			let part_node = gltf.create_root_node(part.name.into(), None);
+			let start_index = gltf
+				.create_node_range(
+					part_node,
+					cube_mesh,
+					part.point_paths.iter().map(|list| *list.first().unwrap()),
+				)
+				.start
+				.0;
 			for (i, path) in part.point_paths.iter().enumerate() {
-				let point_node = gltf.create_child_node(part_node, i.to_string(), cube_mesh);
 				gltf.add_animation_translation(
 					animation,
-					point_node,
+					gltf::NodeIndex(start_index + i),
 					base_timestamps,
 					path,
 					interpolation,
@@ -211,5 +265,89 @@ impl<'a> Animation<'a> {
 		}
 
 		output.write(name, "anim.gltf", gltf.render_json().as_bytes());
+	}
+
+	pub fn check_joints(&self, name: &str, report: &mut String) {
+		use std::fmt::Write;
+		writeln!(report, "{name}").unwrap();
+		for part in &self.parts {
+			let part_name = part.name;
+			let num_points = part.point_paths.len();
+			if num_points < 4 {
+				writeln!(report, "part {part_name} has too few points {num_points}").unwrap();
+				continue;
+			}
+			let mut best = [0, 1, 2, 3];
+			let mut best_sum = f32::INFINITY;
+			for i in 0..num_points {
+				let p0 = part.point_paths[i][0];
+				for j in 0..num_points - 2 {
+					let p1 = part.point_paths[j][0];
+					let v1 = (p1 - p0);
+					if v1.length() < 0.001 {
+						continue;
+					}
+					let v1 = v1.normalized();
+					for k in j + 1..num_points - 1 {
+						let p2 = part.point_paths[k][0];
+						let v2 = (p2 - p0);
+						if v2.length() < 0.001 || (p2 - p1).length() < 0.001 {
+							continue;
+						}
+						let v2 = v2.normalized();
+						let n1 = v1.dot(v2);
+						for l in k + 1..num_points {
+							let p3 = part.point_paths[l][0];
+							let v3 = (p3 - p0);
+							if v3.length() < 0.001
+								|| (p3 - p1).length() < 0.001
+								|| (p3 - p2).length() < 0.001
+							{
+								continue;
+							}
+							let v3 = p2.normalized();
+							let n2 = v1.dot(v3);
+							let n3 = v2.dot(v3);
+							let sum = n1.abs() + n2.abs() + n3.abs();
+							if sum < best_sum {
+								best_sum = sum;
+								best = [i, j, k, l];
+							}
+						}
+					}
+				}
+			}
+
+			let make_mat = |index| {
+				//euclid::default::Transform3D::from_array(
+				euclid::default::Transform3D::from_arrays(
+					best.map(|i| Vec3::to_point(part.point_paths[i][index])),
+				)
+				//	.to_array_transposed(),
+				//)
+			};
+
+			let src @ [p0, p1, p2, p3] = best.map(|i| part.point_paths[i][0]);
+			let Some(inv_src) = make_mat(0).inverse() else {
+				continue;
+			};
+
+			for frame in 0..part.point_paths[0].len() {
+				let dest_mat = make_mat(frame);
+				let transform = inv_src.then(&dest_mat);
+
+				let dest = best.map(|i| part.point_paths[i][frame]);
+				for (src, dest) in src.iter().copied().zip(dest) {
+					let w = transform.transform_point3d_homogeneous((*src).into());
+					let x = Vec3::new(w.x, w.y, w.z);
+					let w = w.w;
+					if (x - dest).length() > 0.001 || (w - 1.0).abs() > 0.001 {
+						writeln!(report, "part: {part_name}, frame: {frame}\nsrc: {src:.1?}\ninv_src: {inv_src:.1?}\ndest_mat: {dest_mat:.1?}\ntransform: {transform:.1?}\ndest: {dest:.1?}\nsrc: {src:.1?}\nx: {x:.1?} ({w:.1})\n").unwrap();
+						return;
+					}
+				}
+			}
+		}
+		report.push('\n');
 	}
 }

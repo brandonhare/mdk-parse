@@ -11,6 +11,7 @@ default = []
 
 [profile.release]
 incremental = true
+#overflow-checks = true
 
 [dependencies]
 base64 = "0.21.2"

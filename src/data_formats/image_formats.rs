@@ -213,6 +213,7 @@ pub fn try_parse_crossfade_image<'a>(
 	Some(([lut1, lut2], Texture::new(width, height, pixels)))
 }
 
+#[derive(Default, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct ColourMap([u64; 4]);
 impl ColourMap {
 	pub fn new() -> Self {
@@ -235,6 +236,10 @@ impl ColourMap {
 	}
 	pub fn push(&mut self, index: u8) {
 		self.0[(index >> 6) as usize] |= 1 << (index & 63);
+	}
+
+	pub fn contains(&self, index: u8) -> bool {
+		(self.0[(index >> 6) as usize] & (1 << (index & 63))) != 0
 	}
 
 	pub fn compare(&self, pal1: &[u8], pal2: &[u8]) -> bool {
@@ -266,5 +271,26 @@ impl Extend<u8> for ColourMap {
 impl<'a> Extend<&'a u8> for ColourMap {
 	fn extend<Iter: IntoIterator<Item = &'a u8>>(&mut self, iter: Iter) {
 		self.extend(iter.into_iter().copied());
+	}
+}
+
+impl std::ops::BitOr for ColourMap {
+	type Output = Self;
+	fn bitor(self, rhs: Self) -> Self::Output {
+		let mut result = self;
+		result |= rhs;
+		result
+	}
+}
+impl std::ops::BitOrAssign for ColourMap {
+	fn bitor_assign(&mut self, rhs: Self) {
+		for (a, b) in self.0.iter_mut().zip(rhs.0.iter()) {
+			*a |= b;
+		}
+	}
+}
+impl std::ops::BitOrAssign<u8> for ColourMap {
+	fn bitor_assign(&mut self, rhs: u8) {
+		self.push(rhs);
 	}
 }

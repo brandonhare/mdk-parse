@@ -41,7 +41,7 @@ impl<'a> Sni<'a> {
 				let anim = parse_animation(&mut entry_reader);
 				anims.push((entry_name, anim));
 			} else if entry_type == 0 {
-				let bsp = Bsp::parse(&mut entry_reader);
+				let bsp = Bsp::parse(&mut entry_reader, entry_name);
 				bsps.push((entry_name, bsp));
 			} else {
 				let wav = Wav::parse(&mut entry_reader);
@@ -78,7 +78,7 @@ impl<'a> Sni<'a> {
 		if !self.bsps.is_empty() {
 			let mut bsp_output = output.push_dir("bsps");
 			for (name, bsp) in self.bsps.iter() {
-				bsp.save_as(name, &mut bsp_output);
+				bsp.save_as(name, &mut bsp_output, None);
 			}
 		}
 

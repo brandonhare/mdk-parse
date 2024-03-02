@@ -1,34 +1,50 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::ops::{Range, RangeInclusive};
 
-use crate::data_formats::{image_formats::ColourMap, Texture};
+use crate::data_formats::{image_formats::ColourMap, Animation, Texture};
 use crate::file_formats::mti::Pen;
 use crate::gltf::AlphaMode;
 use crate::{gltf, OutputWriter, Reader, Vec2, Vec3};
 
+const TRIFLAG_HIDDEN: u32 = 0x12;
+const TRIFLAG_OUTLINE_12: u32 = 0x10_00_00;
+const TRIFLAG_OUTLINE_23: u32 = 0x20_00_00;
+const TRIFLAG_OUTLINE_13: u32 = 0x40_00_00;
+const TRIFLAG_OUTLINE_MASK_LINES: u32 = 0x70_00_00;
+const TRIFLAG_DRAW_OUTLINE: u32 = 0x80_00_00;
+const TRIFLAG_OUTLINE_MASK: u32 = 0xF0_00_00;
+const TRIFLAG_ID_MASK: u32 = 0xFF_00_00_00;
+const TRIFLAG_ID_SHIFT: usize = 24;
+
+pub const REFERENCE_POINTS_NAME: &str = "Reference Points";
+
 pub struct Mesh<'a> {
+	pub parts: Vec<MeshPart<'a>>,
 	pub materials: Vec<&'a str>,
-	pub mesh_data: MeshType<'a>,
 	pub reference_points: Vec<Vec3>,
-}
-
-pub enum MeshType<'a> {
-	Single(MeshGeo),
-	Multimesh {
-		submeshes: Vec<Submesh<'a>>,
-		bbox: [Vec3; 2],
-	},
-}
-
-#[derive(Default)]
-pub struct MeshGeo {
-	pub verts: Vec<Vec3>,
-	pub tris: Vec<MeshTri>,
 	pub bbox: [Vec3; 2],
 }
 
-impl MeshGeo {
-	pub fn try_parse(reader: &mut Reader) -> Option<Self> {
+#[derive(Default)]
+pub struct MeshPart<'a> {
+	pub verts: Vec<Vec3>,
+	pub tris: Vec<MeshTri>,
+	pub bbox: [Vec3; 2],
+	pub name: Cow<'a, str>,
+	pub origin: Vec3,
+}
+
+#[derive(Clone)]
+pub struct MeshTri {
+	pub indices: [u16; 3],
+	pub material: Pen,
+	pub uvs: [Vec2; 3],
+	pub flags: u32, // bsp id and flags, 0 for normal meshes
+}
+
+impl<'a> MeshPart<'a> {
+	pub fn try_parse(reader: &mut Reader, name: &'a str) -> Option<Self> {
 		let num_verts = reader.try_u32().filter(|n| *n < 10000)? as usize;
 		let verts = Vec3::swizzle_vec(reader.try_get_vec::<Vec3>(num_verts)?);
 
@@ -46,131 +62,16 @@ impl MeshGeo {
 			Vec3::new(max_x, max_y, max_z).swizzle(),
 		];
 
-		Some(MeshGeo { verts, tris, bbox })
-	}
-
-	fn get_used_colours(&self, colours: &mut ColourMap) {
-		for tri in &self.tris {
-			if let Pen::Colour(colour) = tri.material {
-				colours.push(colour);
-			}
-		}
-	}
-
-	pub fn split_by_id(mut self) -> MeshType<'static> {
-		let mut submeshes: Vec<Submesh> = Vec::new();
-		let mut tri_map: HashMap<(u8, u16), u16> = HashMap::new();
-
-		self.tris.retain(|tri| {
-			let id = tri.flags >> TRIFLAG_ID_SHIFT;
-			if id == 0 {
-				return true;
-			}
-
-			let id_key = id as f32;
-			let target = if let Some(sub) = submeshes.iter_mut().find(|sub| sub.origin[0] == id_key)
-			{
-				&mut sub.mesh_data
-			} else {
-				submeshes.push(Submesh {
-					name: id.to_string().into(),
-					origin: Vec3::new(id_key, 0.0, 0.0),
-					..Default::default()
-				});
-				&mut submeshes.last_mut().unwrap().mesh_data
-			};
-
-			let mut tri = tri.clone();
-			for i in &mut tri.indices {
-				*i = *tri_map.entry((id as u8, *i)).or_insert_with(|| {
-					let n = target.verts.len();
-					target.verts.push(self.verts[*i as usize]);
-					n as u16
-				});
-			}
-			target.tris.push(tri);
-
-			false
-		});
-
-		if submeshes.is_empty() {
-			MeshType::Single(self)
-		} else {
-			// remove unused verts
-			tri_map.clear();
-			for tri in &self.tris {
-				for i in tri.indices {
-					tri_map.insert((0, i), 0);
-				}
-			}
-			let mut i = 0;
-			let mut count = 0;
-			self.verts.retain(|_| {
-				if let Some(v) = tri_map.get_mut(&(0, i)) {
-					*v = count;
-					count += 1;
-					i += 1;
-					true
-				} else {
-					i += 1;
-					false
-				}
-			});
-			for tri in &mut self.tris {
-				for i in &mut tri.indices {
-					*i = *tri_map.get(&(0, *i)).unwrap();
-				}
-			}
-
-			for sub in &mut submeshes {
-				sub.origin = Default::default();
-				sub.mesh_data.bbox = Vec3::calculate_bbox(&sub.mesh_data.verts);
-			}
-
-			let bbox = self.bbox;
-			submeshes.insert(
-				0,
-				Submesh {
-					mesh_data: self,
-					name: "Base".into(),
-					origin: Default::default(),
-				},
-			);
-			submeshes[1..].sort_unstable_by(|a, b| {
-				a.name
-					.len()
-					.cmp(&b.name.len())
-					.then_with(|| a.name.cmp(&b.name))
-			});
-			MeshType::Multimesh { submeshes, bbox }
-		}
+		Some(Self {
+			verts,
+			tris,
+			bbox,
+			name: name.into(),
+			origin: Vec3::default(),
+		})
 	}
 }
 
-#[derive(Default)]
-pub struct Submesh<'a> {
-	pub mesh_data: MeshGeo,
-	pub name: Cow<'a, str>,
-	pub origin: Vec3,
-}
-
-const TRIFLAG_HIDDEN: u32 = 0x12;
-const TRIFLAG_OUTLINE_12: u32 = 0x10_00_00;
-const TRIFLAG_OUTLINE_23: u32 = 0x20_00_00;
-const TRIFLAG_OUTLINE_13: u32 = 0x40_00_00;
-const TRIFLAG_OUTLINE_MASK_LINES: u32 = 0x70_00_00;
-const TRIFLAG_DRAW_OUTLINE: u32 = 0x80_00_00;
-const TRIFLAG_OUTLINE_MASK: u32 = 0xF0_00_00;
-const TRIFLAG_ID_MASK: u32 = 0xFF_00_00_00;
-const TRIFLAG_ID_SHIFT: usize = 24;
-
-#[derive(Clone)]
-pub struct MeshTri {
-	pub indices: [u16; 3],
-	pub material: Pen,
-	pub uvs: [Vec2; 3],
-	pub flags: u32, // bsp id and flags, 0 for normal meshes
-}
 impl MeshTri {
 	pub fn try_parse_slice(reader: &mut Reader, count: usize) -> Option<Vec<Self>> {
 		if count > 10000 {
@@ -183,7 +84,7 @@ impl MeshTri {
 			if material_index > 256 {
 				return None;
 			}
-			let material = Pen::new(material_index as i32);
+			let material = Pen::new(material_index);
 			let uvs: [[f32; 2]; 3] = reader.try_get_unvalidated()?;
 			let mut flags = reader.try_u32()?;
 
@@ -225,59 +126,62 @@ impl MeshTri {
 	pub fn id(&self) -> u8 {
 		(self.flags >> 24) as u8
 	}
+	pub fn is_hidden(&self) -> bool {
+		self.flags & TRIFLAG_HIDDEN != 0
+	}
 }
 
 impl<'a> Mesh<'a> {
-	pub fn parse(reader: &mut Reader<'a>, is_multimesh: bool) -> Mesh<'a> {
-		Self::try_parse(reader, is_multimesh).expect("failed to read mesh")
+	pub fn parse(reader: &mut Reader<'a>, name: &'a str, is_multimesh: bool) -> Mesh<'a> {
+		Self::try_parse(reader, name, is_multimesh).expect("failed to read mesh")
 	}
-	pub fn try_parse(reader: &mut Reader<'a>, is_multimesh: bool) -> Option<Mesh<'a>> {
-		let num_textures = reader.try_u32()? as usize;
-		if num_textures > 500 {
-			return None;
-		};
-		let mut textures = Vec::with_capacity(num_textures);
-		for _ in 0..num_textures {
-			textures.push(reader.try_str(16)?);
+	pub fn try_parse(
+		reader: &mut Reader<'a>, name: &'a str, is_multimesh: bool,
+	) -> Option<Mesh<'a>> {
+		let num_materials = reader.try_u32().filter(|n| *n <= 500)? as usize;
+		let mut materials = Vec::with_capacity(num_materials);
+		for _ in 0..num_materials {
+			materials.push(reader.try_str(16)?);
 		}
 
-		let mesh_data = if !is_multimesh {
-			MeshType::Single(MeshGeo::try_parse(reader)?)
+		let full_bbox: [Vec3; 2];
+		let parts = if !is_multimesh {
+			let part = MeshPart::try_parse(reader, name)?;
+			full_bbox = part.bbox;
+			vec![part]
 		} else {
-			let num_submeshes = reader.try_u32().filter(|n| *n < 100)? as usize;
-			let mut submeshes = Vec::with_capacity(num_submeshes);
+			let num_parts = reader.try_u32().filter(|n| *n < 100)? as usize;
+			let mut parts = Vec::with_capacity(num_parts);
 
-			for _ in 0..num_submeshes {
+			for _ in 0..num_parts {
 				let name = reader.try_str(12)?;
 				let origin = reader.try_vec3()?.swizzle();
-				let mut mesh_data = MeshGeo::try_parse(reader)?;
-				for point in mesh_data.verts.iter_mut() {
-					*point -= origin;
-				}
-				submeshes.push(Submesh {
-					mesh_data,
-					name: name.into(),
-					origin,
-				});
+				let mut part = MeshPart::try_parse(reader, name)?;
+				// part.origin = origin;
+				// for point in part.verts.iter_mut() {
+				// 	*point -= origin;
+				// }
+				parts.push(part);
 			}
 
 			let [min_x, max_x, min_y, max_y, min_z, max_z]: [f32; 6] = reader.try_get()?;
-			let bbox = [
+			full_bbox = [
 				Vec3::new(min_x, min_y, min_z).swizzle(),
 				Vec3::new(max_x, max_y, max_z).swizzle(),
 			];
 
-			MeshType::Multimesh { submeshes, bbox }
+			parts
 		};
 
-		let num_reference_points = reader.try_u32()?;
+		let num_reference_points = reader.try_u32().filter(|n| *n < 100)?;
 		let reference_points =
 			Vec3::swizzle_vec(reader.try_get_vec(num_reference_points as usize)?);
 
 		let mut result = Mesh {
-			materials: textures,
-			mesh_data,
+			materials,
+			parts,
 			reference_points,
+			bbox: full_bbox,
 		};
 
 		result.remove_unused_materials();
@@ -285,33 +189,22 @@ impl<'a> Mesh<'a> {
 		Some(result)
 	}
 
-	pub fn for_tris_mut(&mut self, mut func: impl FnMut(&mut [MeshTri])) {
-		match &mut self.mesh_data {
-			MeshType::Single(geo) => func(&mut geo.tris),
-			MeshType::Multimesh { submeshes, .. } => {
-				for mesh in submeshes {
-					func(&mut mesh.mesh_data.tris);
+	pub fn remove_unused_materials(&mut self) {
+		let mut remap_list = vec![0u8; self.materials.len()];
+
+		for part in &self.parts {
+			for tri in &part.tris {
+				if let Pen::Texture(index) = tri.material {
+					remap_list[index as usize] = 1;
 				}
 			}
 		}
-	}
-
-	pub fn remove_unused_materials(&mut self) {
-		let mut used = vec![0; self.materials.len()];
-
-		self.for_tris_mut(|tris| {
-			for tri in tris {
-				if let Pen::Texture(index) = tri.material {
-					used[index as usize] = 1;
-				}
-			}
-		});
 
 		let mut i = 0;
 		let mut count = 0;
 		self.materials.retain(|_| {
-			if used[i] != 0 {
-				used[i] = count;
+			if remap_list[i] != 0 {
+				remap_list[i] = count;
 				count += 1;
 				i += 1;
 				true
@@ -321,16 +214,93 @@ impl<'a> Mesh<'a> {
 			}
 		});
 
-		self.for_tris_mut(|tris| {
-			for tri in tris {
+		if i == count as usize {
+			return;
+		}
+
+		for part in &mut self.parts {
+			for tri in &mut part.tris {
 				if let Pen::Texture(index) = &mut tri.material {
-					*index = used[*index as usize];
+					*index = remap_list[*index as usize];
 				}
 			}
-		});
+		}
 	}
 
-	pub fn save_as(&self, name: &str, output: &mut OutputWriter) {
+	/*
+	pub fn flatten_materials(&mut self, mut is_pen: impl FnMut(&str) -> Pen) {
+		let mut remap_list: Vec<Pen> = self
+			.materials
+			.iter()
+			.map(|mat| match is_pen(*mat) {
+				Pen::Texture(_) => Pen::Texture(0),
+				pen => pen,
+			})
+			.collect();
+
+		for part in &mut self.parts {
+			for tri in &mut part.tris {
+				if let Pen::Texture(index) = tri.material {
+					match &mut remap_list[index as usize] {
+						Pen::Texture(used) => *used = 1,
+						pen => tri.material = *pen,
+					}
+				}
+			}
+		}
+
+		let mut i = 0;
+		let mut remaining_count = 0;
+		self.materials.retain(|mat| match &mut remap_list[i] {
+			Pen::Texture(n) if *n != 0 => {
+				*n = remaining_count;
+				remaining_count += 1;
+				i += 1;
+				true
+			}
+			_ => {
+				i += 1;
+				false
+			}
+		});
+		if i == remaining_count as usize {
+			return;
+		}
+
+		for part in &mut self.parts {
+			for tri in &mut part.tris {
+				if let Pen::Texture(index) = tri.material {
+					tri.material = remap_list[index as usize];
+				}
+			}
+		}
+	}
+	*/
+
+	pub fn is_anim_compatible(&self, anim: &Animation) -> bool {
+		/*if self.reference_points.len() < anim.reference_points.len() {
+			return false;
+		}*/
+
+		let mut has_any = false;
+		for anim_part in &anim.parts {
+			if let Some(mesh_part) = self
+				.parts
+				.iter()
+				.find(|mesh_part| mesh_part.name == anim_part.name)
+			{
+				if anim_part.point_paths.len() != mesh_part.verts.len() {
+					return false;
+				}
+				has_any = true;
+			}
+		}
+
+		has_any
+	}
+
+	/*
+	pub fn save_as(&self, name: &str, output: &mut OutputWriter, anims: &[(&str, &Animation)]) {
 		let mut gltf = gltf::Gltf::new(name.to_owned());
 
 		let root = gltf.get_root_node();
@@ -340,6 +310,7 @@ impl<'a> Mesh<'a> {
 	}
 	pub fn save_textured_as(
 		&self, name: &str, output: &mut OutputWriter, textures: &mut impl TextureHolder<'a>,
+		anims: &[(&str, &Animation)],
 	) {
 		let mut gltf = gltf::Gltf::new(name.to_owned());
 
@@ -438,8 +409,8 @@ impl<'a> Mesh<'a> {
 		let mut shiny_prim = MeshPrimitive::default();
 
 		let mut create_submesh = |gltf: &mut gltf::Gltf,
-		                          name: String,
-		                          geo: &MeshGeo|
+								  name: String,
+								  geo: &MeshGeo|
 		 -> gltf::MeshIndex {
 			for prim in &mut prims {
 				prim.clear()
@@ -660,7 +631,7 @@ impl<'a> Mesh<'a> {
 				assert!(!prim.verts.is_empty());
 
 				let prim_id =
-					gltf.add_mesh_primitive(mesh, &prim.verts, &prim.indices, prim.material);
+					gltf.create_mesh_primitive(mesh, &prim.verts, &prim.indices, prim.material);
 				// these are no-ops if unused
 				gltf.add_primitive_uvs(prim_id, &prim.uvs);
 				gltf.add_primitive_colours(prim_id, &prim.colours);
@@ -700,40 +671,488 @@ impl<'a> Mesh<'a> {
 		target
 	}
 
-	pub fn get_used_colours(&self, textures: &impl TextureHolder<'a>) -> ColourMap {
+	*/
+
+	pub fn get_used_vertex_colours(&self) -> ColourMap {
 		let mut result = ColourMap::new();
-		for mat in &self.materials {
-			textures.get_used_colours(mat, &mut result);
-		}
-		match &self.mesh_data {
-			MeshType::Single(geo) => geo.get_used_colours(&mut result),
-			MeshType::Multimesh { submeshes, .. } => {
-				for mesh in submeshes {
-					mesh.mesh_data.get_used_colours(&mut result);
+		for part in &self.parts {
+			for tri in &part.tris {
+				if let Pen::Colour(n) = tri.material {
+					result.push(n);
 				}
 			}
 		}
 		result
 	}
+
+	pub fn save_as(
+		&self, mesh_name: &str, output: &mut OutputWriter, materials: Option<&Materials>,
+		anims: &[(&str, &Animation)],
+	) {
+		let palette = materials.map(|mat| mat.palette);
+		let mut primitives = Primitives::default();
+		if let Some(materials) = materials {
+			primitives.textured.resize_with(
+				materials
+					.materials
+					.iter()
+					.rev()
+					.skip_while(|mat| {
+						!matches!(
+							mat,
+							ResolvedMaterial::TextureEmbed { .. }
+								| ResolvedMaterial::TextureRef { .. },
+						)
+					})
+					.count(),
+				Default::default,
+			);
+		}
+
+		let mut gltf = gltf::Gltf::new(mesh_name.to_string());
+
+		let mut part_joints: Vec<(&str, Range<gltf::NodeIndex>)> = Vec::new();
+		/*let skeleton_nodes = if anims.is_empty() {
+			gltf::NodeIndex(0)
+		} else {
+			gltf.create_root_node(String::from("Skeletons"), None)
+		};*/
+
+		for part in &self.parts {
+			let mesh = gltf.create_mesh(part.name.to_string());
+			let part_node = gltf.create_root_node(part.name.to_string(), Some(mesh));
+			//gltf.set_node_position(part_node, part.origin);
+
+			let part_is_animated = anims.iter().any(|(_anim_name, anim)| {
+				anim.parts
+					.iter()
+					.any(|anim_part| anim_part.name == part.name)
+			});
+
+			if part_is_animated {
+				//let skeleton_node = gltf.create_child_node(skeleton_nodes, format!("{} Skeleton", part.name), None);
+				let skeleton_node = part_node;
+				let skin = gltf.create_skin(skeleton_node);
+				gltf.set_node_skin(part_node, skin);
+				let node_range = gltf.create_node_range(
+					skeleton_node,
+					None,
+					part.verts.iter().copied(),
+					//(0..part.verts.len()).map(|_| Default::default()),
+				);
+				gltf.set_skin_joints(skin, node_range.clone());
+				part_joints.push((&part.name, node_range));
+			}
+
+			if let Some(materials) = materials {
+				primitives.clear();
+				split_into_primitives(part, &mut primitives, materials, part_is_animated);
+			} else {
+				primitives.coloured.base.clear();
+				flatten_into_primitive(part, &mut primitives.coloured.base, part_is_animated);
+			}
+
+			// save textured prims
+			for (tex_index, prim) in primitives.textured.iter_mut().enumerate() {
+				if prim.base.indices.is_empty() {
+					continue;
+				}
+
+				let texture_name = self.materials[tex_index];
+
+				let texture = &materials.unwrap().materials[tex_index];
+				let (width, height) = match texture {
+					ResolvedMaterial::TextureRef { width, height, .. } => (*width, *height),
+					ResolvedMaterial::TextureEmbed { texture, .. } => {
+						(texture.width, texture.height)
+					}
+					_ => unreachable!("textured prim should only reference valid texture indices"),
+				};
+				let width = if width != 0 { 1.0 / width as f32 } else { 1.0 };
+				let height = if height != 0 {
+					1.0 / height as f32
+				} else {
+					1.0
+				};
+				for [u, v] in &mut prim.uvs {
+					*u *= width;
+					*v *= height;
+				}
+
+				let mat_index = *prim.base.material.get_or_insert_with(|| {
+					match &materials.as_ref().unwrap().materials[tex_index] {
+						ResolvedMaterial::TextureRef { path, masked, .. } => gltf
+							.create_texture_material_ref(
+								texture_name.to_string(),
+								path.to_string(),
+								masked.then_some(AlphaMode::Mask),
+							),
+						ResolvedMaterial::TextureEmbed { texture, masked } => gltf
+							.create_texture_material_embedded(
+								texture_name.to_string(),
+								&texture.create_png(palette),
+								masked.then_some(AlphaMode::Mask),
+							),
+						_ => unreachable!("found invalid texture index after mesh primitive split"),
+					}
+				});
+
+				let prim_index =
+					prim.base
+						.add_to_gltf(&mut gltf, texture_name.to_string(), mesh, mat_index);
+				gltf.add_primitive_uvs(prim_index, &prim.uvs);
+
+				debug_assert_eq!(
+					prim.base.indices.len() % 3,
+					0,
+					"invalid primitive index count"
+				);
+			}
+
+			// save coloured prims
+			if !primitives.coloured.base.indices.is_empty() {
+				let prim = &mut primitives.coloured;
+				let name = String::from("Vertex Colours");
+				let mat_index = *prim
+					.base
+					.material
+					.get_or_insert_with(|| gltf.create_colour_material(name.clone(), [1.0; 4]));
+				let prim_index = prim.base.add_to_gltf(&mut gltf, name, mesh, mat_index);
+				gltf.add_primitive_colours(prim_index, &prim.colours);
+
+				debug_assert_eq!(
+					prim.base.indices.len() % 3,
+					0,
+					"invalid primitive index count"
+				);
+			}
+			// save translucent prims
+			if !primitives.translucent.base.indices.is_empty() {
+				let prim = &mut primitives.translucent;
+				let name = String::from("Translucent Colours");
+				let mat_index = *prim
+					.base
+					.material
+					.get_or_insert_with(|| gltf.create_translucent_material(name.clone()));
+				let prim_index = prim.base.add_to_gltf(&mut gltf, name, mesh, mat_index);
+				gltf.add_primitive_colours(prim_index, &prim.colours);
+
+				debug_assert_eq!(
+					prim.base.indices.len() % 3,
+					0,
+					"invalid primitive index count"
+				);
+			}
+			// save outlines
+			if !primitives.outlines.base.indices.is_empty() {
+				let prim = &mut primitives.outlines;
+				let name = String::from("Outlines");
+				let mat_index = *prim
+					.base
+					.material
+					.get_or_insert_with(|| gltf.create_translucent_material(name.clone()));
+				let prim_index = prim.base.add_to_gltf(&mut gltf, name, mesh, mat_index);
+				gltf.add_primitive_colours(prim_index, &prim.colours);
+				gltf.set_primitive_mode(prim_index, gltf::PrimitiveMode::Lines);
+
+				debug_assert_eq!(
+					prim.base.indices.len() % 2,
+					0,
+					"invalid textured primitive index count"
+				);
+			}
+
+			// save shiny prims
+			if !primitives.shiny.base.indices.is_empty() {
+				let prim = &mut primitives.shiny;
+				let name = String::from("Shiny");
+				let mat_index = *prim
+					.base
+					.material
+					.get_or_insert_with(|| gltf.create_shiny_material(name.clone()));
+				let prim_index = prim.base.add_to_gltf(&mut gltf, name, mesh, mat_index);
+				gltf.add_primitive_normals(prim_index, &prim.normals);
+
+				debug_assert_eq!(
+					prim.base.indices.len() % 3,
+					0,
+					"invalid textured primitive index count"
+				);
+			}
+
+			// save unknown material prims
+			if !primitives.unknown.indices.is_empty() {
+				let prim = &mut primitives.unknown;
+				let name = String::from("Unknown");
+				let mat_index = *prim.material.get_or_insert_with(|| {
+					println!("Unknown material used in mesh {mesh_name}");
+					gltf.create_colour_material(name.clone(), [1.0, 0.0, 1.0, 1.0])
+				});
+				prim.add_to_gltf(&mut gltf, name, mesh, mat_index);
+
+				debug_assert_eq!(
+					prim.indices.len() % 3,
+					0,
+					"invalid textured primitive index count"
+				);
+			}
+		}
+
+		let mut num_ref_points = self.reference_points.len();
+		if num_ref_points != 0 {
+			for (_, anim) in anims {
+				for part in &anim.parts {
+					if part.name == REFERENCE_POINTS_NAME {
+						num_ref_points = num_ref_points.max(part.point_paths.len());
+						break;
+					}
+				}
+			}
+
+			let ref_point_node = gltf.create_root_node(String::from(REFERENCE_POINTS_NAME), None);
+			let cube = gltf.get_cube_mesh();
+			let nodes = gltf.create_node_range(
+				ref_point_node,
+				Some(cube),
+				self.reference_points
+					.iter()
+					.copied()
+					.chain(std::iter::repeat(Default::default()))
+					.take(num_ref_points),
+			);
+			if !anims.is_empty() {
+				part_joints.push((REFERENCE_POINTS_NAME, nodes.clone()));
+			}
+		}
+
+		// save animations
+		let mut anim_cache = Vec::new();
+		for &(anim_name, anim) in anims {
+			anim.add_to_gltf(&mut gltf, anim_name, &part_joints, &mut anim_cache);
+		}
+		for (_, Range { start, end }) in &part_joints {
+			for index in start.0..end.0 {
+				gltf.set_node_position(gltf::NodeIndex(index), Default::default());
+			}
+		}
+
+		output.write(mesh_name, "gltf", gltf.render_json().as_bytes());
+	}
 }
 
-pub trait TextureHolder<'a> {
-	fn lookup(&mut self, name: &str) -> TextureResult<'a>;
-	fn get_used_colours(&self, name: &str, colours: &mut ColourMap);
-	fn get_palette(&self) -> &[u8];
-	fn get_translucent_colours(&self) -> [[u8; 4]; 4];
+#[derive(Default)]
+struct MeshPrimitive {
+	material: Option<gltf::MaterialIndex>,
+	verts: Vec<Vec3>,
+	indices: Vec<u16>,
+	anim_indices: Vec<u16>,
+}
+#[derive(Default)]
+struct TexturedPrimitive {
+	base: MeshPrimitive,
+	uvs: Vec<Vec2>,
+}
+#[derive(Default)]
+struct ColourPrimitive {
+	base: MeshPrimitive,
+	colours: Vec<[u8; 4]>,
+}
+#[derive(Default)]
+struct ShinyPrimitive {
+	base: MeshPrimitive,
+	normals: Vec<Vec3>,
 }
 
-pub enum TextureResult<'a> {
-	None,
+#[derive(Default)]
+struct Primitives {
+	textured: Vec<TexturedPrimitive>,
+	coloured: ColourPrimitive,
+	outlines: ColourPrimitive,
+	translucent: ColourPrimitive,
+	shiny: ShinyPrimitive,
+	unknown: MeshPrimitive,
+}
+
+impl MeshPrimitive {
+	fn clear(&mut self) {
+		self.verts.clear();
+		self.indices.clear();
+		self.anim_indices.clear();
+	}
+	fn add_to_gltf(
+		&self, gltf: &mut gltf::Gltf, name: String, mesh: gltf::MeshIndex,
+		material: gltf::MaterialIndex,
+	) -> gltf::PrimitiveIndex {
+		let result = gltf.create_mesh_primitive(
+			mesh,
+			Some(name),
+			&self.verts,
+			&self.indices,
+			Some(material),
+		);
+		gltf.add_primitive_joints(result, &self.anim_indices);
+		result
+	}
+}
+impl Primitives {
+	fn clear(&mut self) {
+		for tex in &mut self.textured {
+			tex.base.clear();
+			tex.uvs.clear();
+		}
+		self.coloured.base.clear();
+		self.coloured.colours.clear();
+		self.outlines.base.clear();
+		self.outlines.colours.clear();
+		self.translucent.base.clear();
+		self.translucent.colours.clear();
+		self.shiny.base.clear();
+		self.shiny.normals.clear();
+		self.unknown.clear();
+	}
+}
+
+fn flatten_into_primitive(part: &MeshPart, result: &mut MeshPrimitive, is_animated: bool) {
+	result.verts.extend_from_slice(&part.verts);
+	result.indices.extend(part.tris.iter().flat_map(|tri| {
+		let [i1, i2, i3] = tri.indices;
+		[i1, i3, i2]
+	}));
+	if is_animated {
+		result.anim_indices.extend(0..part.verts.len() as u16);
+	}
+}
+fn split_into_primitives<'a>(
+	part: &MeshPart,
+	Primitives {
+		textured,
+		coloured,
+		outlines,
+		translucent,
+		shiny,
+		unknown,
+	}: &'a mut Primitives,
+	materials: &Materials, is_animated: bool,
+) {
+	for tri in &part.tris {
+		let material: Pen = if let Pen::Texture(tex_index) = tri.material {
+			match &materials.materials[tex_index as usize] {
+				ResolvedMaterial::Missing => Pen::Colour(0),
+				ResolvedMaterial::Pen(pen) => *pen,
+				ResolvedMaterial::TextureRef { .. } | ResolvedMaterial::TextureEmbed { .. } => {
+					tri.material
+				}
+			}
+		} else {
+			tri.material
+		};
+
+		// outlines
+		if tri.flags & TRIFLAG_DRAW_OUTLINE != 0 {
+			let col = match material {
+				Pen::Translucent(col) => materials.translucent_colours[col as usize],
+				pen => {
+					println!("outline on invalid mesh tri {pen:?}");
+					[0; 4]
+				}
+			};
+
+			let l12 = tri.flags & TRIFLAG_OUTLINE_12 != 0;
+			let l13 = tri.flags & TRIFLAG_OUTLINE_13 != 0;
+			let l23 = tri.flags & TRIFLAG_OUTLINE_23 != 0;
+			let v1 = l12 || l13;
+			let v2 = l12 || l23;
+			let v3 = l13 || l23;
+
+			let prim = &mut outlines.base;
+			let index = prim.verts.len();
+
+			for (i, has_vert) in [v1, v2, v3].iter().enumerate() {
+				if !has_vert {
+					continue;
+				}
+				let index = tri.indices[i];
+				prim.verts.push(part.verts[index as usize]);
+				outlines.colours.push(col);
+				if is_animated {
+					prim.anim_indices.push(index);
+				}
+			}
+
+			let index = index as u16;
+			if l12 {
+				prim.indices.extend([index, index + 1]);
+			}
+			if l13 {
+				if v2 {
+					prim.indices.extend([index, index + 2]);
+				} else {
+					prim.indices.extend([index, index + 1]);
+				}
+			}
+			if l23 {
+				if v1 {
+					prim.indices.extend([index + 1, index + 2]);
+				} else {
+					prim.indices.extend([index, index + 1]);
+				}
+			}
+		}
+
+		if tri.indices[0] == tri.indices[1]
+			|| tri.indices[0] == tri.indices[2]
+			|| tri.indices[1] == tri.indices[2]
+		{
+			// degenerate
+			continue;
+		}
+
+		let prim: &mut MeshPrimitive = match material {
+			Pen::Texture(tex_index) => {
+				let prim = &mut textured[tex_index as usize];
+				prim.uvs.extend(tri.uvs);
+				&mut prim.base
+			}
+			Pen::Colour(col) => {
+				let col = &materials.palette[col as usize * 3..];
+				let col = [col[0], col[1], col[2], 255];
+				coloured.colours.extend([col, col, col]);
+				&mut coloured.base
+			}
+			Pen::Translucent(col) => {
+				let col = materials.translucent_colours[col as usize];
+				translucent.colours.extend([col, col, col]);
+				&mut translucent.base
+			}
+			Pen::Shiny(shiny_angle) => &mut shiny.base, // todo normals
+			Pen::Unknown(_) => unknown,
+		};
+		let index = prim.verts.len() as u16;
+		prim.indices.extend([index, index + 2, index + 1]); // swizzle indices
+		prim.verts
+			.extend(tri.indices.iter().map(|i| part.verts[*i as usize]));
+		if is_animated {
+			prim.anim_indices.extend(tri.indices);
+		}
+	}
+}
+
+pub struct Materials<'a> {
+	pub materials: &'a [ResolvedMaterial<'a>],
+	pub palette: &'a [u8],
+	pub translucent_colours: [[u8; 4]; 4],
+}
+
+pub enum ResolvedMaterial<'a> {
+	Missing,
 	Pen(Pen),
-	SaveRef {
+	TextureRef {
 		width: u16,
 		height: u16,
-		path: String,
+		path: &'a str,
 		masked: bool,
 	},
-	SaveEmbed {
+	TextureEmbed {
 		texture: Texture<'a>,
 		masked: bool,
 	},

@@ -29,6 +29,8 @@ struct Primitive {
 	material: Option<MaterialIndex>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	mode: Option<PrimitiveMode>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	name: Option<String>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "UPPERCASE")]
@@ -38,6 +40,12 @@ struct Attributes {
 	texcoord_0: Option<AccessorIndex>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	color_0: Option<AccessorIndex>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	normals_0: Option<AccessorIndex>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	joints_0: Option<AccessorIndex>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	weights_0: Option<AccessorIndex>,
 }
 
 #[derive(Serialize, Clone, Copy, Eq, PartialEq)]
@@ -244,31 +252,26 @@ struct BufferView {
 	//pub byte_stride : Option<usize>
 }
 
-#[derive(Serialize)]
+#[derive(Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Scene {
 	name: String,
-	nodes: [NodeIndex; 1],
-}
-impl Default for Scene {
-	fn default() -> Self {
-		Self {
-			name: Default::default(),
-			nodes: [NodeIndex(0)],
-		}
-	}
+	nodes: Vec<NodeIndex>,
 }
 
-#[derive(Serialize)]
+#[derive(Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Node {
+	#[serde(skip_serializing_if = "String::is_empty")]
 	name: String,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	mesh: Option<MeshIndex>,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	translation: Option<Vec3>,
+	#[serde(skip_serializing_if = "Vec3::is_zero")]
+	translation: Vec3,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	children: Vec<NodeIndex>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	skin: Option<SkinIndex>,
 	#[serde(skip_serializing_if = "serde_json::Map::is_empty")]
 	extras: serde_json::Map<String, serde_json::Value>,
 
@@ -315,8 +318,14 @@ struct Animation {
 	samplers: Vec<AnimationSampler>,
 }
 
+#[derive(Serialize)]
+struct Skin {
+	skeleton: NodeIndex,
+	joints: Vec<NodeIndex>,
+}
+
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
-pub struct NodeIndex(usize);
+pub struct NodeIndex(pub usize);
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 pub struct MeshIndex(usize);
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
@@ -335,6 +344,8 @@ struct ImageIndex(usize);
 struct TextureIndex(usize);
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 pub struct AnimationIndex(usize);
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
+pub struct SkinIndex(usize);
 
 #[derive(Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -355,23 +366,27 @@ pub struct Gltf {
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	samplers: Vec<Sampler>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
-	accessors: Vec<Accessor>,
+	animations: Vec<Animation>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
-	buffers: Vec<Buffer>,
+	skins: Vec<Skin>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	accessors: Vec<Accessor>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	buffer_views: Vec<BufferView>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
-	animations: Vec<Animation>,
+	buffers: Vec<Buffer>,
 
 	#[serde(skip)]
 	debug_cube: Option<MeshIndex>,
+	#[serde(skip)]
+	weights: Option<BufferViewIndex>,
 }
 
 enum PrimitiveTarget {
 	AnimationData,
 	AnimationTimestamps,
-	Indices = 34963,
-	Vertices = 34962,
+	Indices = 34963,  // ELEMENT_ARRAY_BUFFER
+	Vertices = 34962, // ARRAY_BUFFER
 }
 
 impl Gltf {
@@ -379,22 +394,16 @@ impl Gltf {
 		Gltf {
 			scenes: [Scene {
 				name: name.clone(),
-				nodes: [NodeIndex(0)],
-			}],
-			nodes: vec![Node {
-				name,
-				mesh: None,
-				translation: None,
-				children: Vec::new(),
-				parent: None,
-				extras: Default::default(),
+				nodes: Vec::new(),
 			}],
 			..Default::default()
 		}
 	}
 
-	pub fn get_root_node(&self) -> NodeIndex {
-		NodeIndex(0)
+	pub fn create_root_node(&mut self, name: String, mesh: Option<MeshIndex>) -> NodeIndex {
+		let result = self.create_node(name, mesh);
+		self.scenes[0].nodes.push(result);
+		result
 	}
 
 	#[must_use]
@@ -470,20 +479,45 @@ impl Gltf {
 		self.nodes.push(Node {
 			name,
 			mesh,
-			translation: None,
-			children: Vec::new(),
-			parent: None,
-			extras: Default::default(),
+			..Default::default()
 		});
 		result
 	}
 	pub fn create_child_node(
 		&mut self, parent: NodeIndex, name: String, mesh: Option<MeshIndex>,
 	) -> NodeIndex {
-		let child_node = self.create_node(name, mesh);
-		self.set_node_parent(parent, child_node);
-		child_node
+		let result = NodeIndex(self.nodes.len());
+		self.nodes.push(Node {
+			name,
+			mesh,
+			parent: Some(parent),
+			..Default::default()
+		});
+		self.nodes[parent.0].children.push(result);
+		result
 	}
+
+	pub fn create_node_range(
+		&mut self, parent: NodeIndex, mesh: Option<MeshIndex>,
+		positions: impl Iterator<Item = Vec3>,
+	) -> std::ops::Range<NodeIndex> {
+		let start = self.nodes.len();
+		self.nodes
+			.extend(positions.enumerate().map(|(i, pos)| Node {
+				name: i.to_string(),
+				mesh,
+				parent: Some(parent),
+				translation: pos,
+				..Default::default()
+			}));
+		let end = self.nodes.len();
+		self.nodes[parent.0]
+			.children
+			.extend((start..end).map(NodeIndex));
+
+		NodeIndex(start)..NodeIndex(end)
+	}
+
 	pub fn get_node_name_mut(&mut self, node: NodeIndex) -> &mut String {
 		&mut self.nodes[node.0].name
 	}
@@ -503,7 +537,10 @@ impl Gltf {
 		self.nodes[node.0].mesh = Some(mesh);
 	}
 	pub fn set_node_position(&mut self, node: NodeIndex, position: Vec3) {
-		self.nodes[node.0].translation = Some(position);
+		self.nodes[node.0].translation = position;
+	}
+	pub fn get_node_position(&self, node: NodeIndex) -> Vec3 {
+		self.nodes[node.0].translation
 	}
 	pub fn get_node_mesh(&self, node: NodeIndex) -> Option<MeshIndex> {
 		self.nodes[node.0].mesh
@@ -512,10 +549,6 @@ impl Gltf {
 		&mut self, node: NodeIndex, name: impl Into<String>, value: impl Into<serde_json::Value>,
 	) {
 		self.nodes[node.0].extras.insert(name.into(), value.into());
-	}
-
-	pub fn create_base_node(&mut self, name: String, mesh: Option<MeshIndex>) -> NodeIndex {
-		self.create_child_node(self.get_root_node(), name, mesh)
 	}
 
 	pub fn create_mesh(&mut self, name: String) -> MeshIndex {
@@ -527,12 +560,12 @@ impl Gltf {
 		mesh
 	}
 
-	fn add_primitive_data<T: BufferData>(
+	fn add_buffer_data<T: BufferData>(
 		&mut self, data: &[T], target: PrimitiveTarget,
 	) -> AccessorIndex {
 		if matches!(target, PrimitiveTarget::Indices) {
 			assert!(
-				matches!(T::ACCESSOR_TYPE, AccessorType::Scalar),
+				matches!(T::ELEMENT_TYPE, AccessorType::Scalar),
 				"indices must be flat!"
 			);
 		}
@@ -566,7 +599,7 @@ impl Gltf {
 			component_type: T::COMPONENT_TYPE,
 			normalized: T::NORMALIZED,
 			count: data.len(),
-			element_type: T::ACCESSOR_TYPE,
+			element_type: T::ELEMENT_TYPE,
 			min,
 			max,
 		});
@@ -574,12 +607,12 @@ impl Gltf {
 		accessor_index
 	}
 
-	pub fn add_mesh_primitive(
-		&mut self, mesh: MeshIndex, positions: &[Vec3], indices: &[u16],
+	pub fn create_mesh_primitive(
+		&mut self, mesh: MeshIndex, name: Option<String>, positions: &[Vec3], indices: &[u16],
 		material: Option<MaterialIndex>,
 	) -> PrimitiveIndex {
-		let position = self.add_primitive_data(positions, PrimitiveTarget::Vertices);
-		let indices = self.add_primitive_data(indices, PrimitiveTarget::Indices);
+		let position = self.add_buffer_data(positions, PrimitiveTarget::Vertices);
+		let indices = self.add_buffer_data(indices, PrimitiveTarget::Indices);
 
 		let primitives = &mut self.meshes[mesh.0].primitives;
 		let primitive_index = primitives.len();
@@ -588,35 +621,113 @@ impl Gltf {
 				position,
 				texcoord_0: None,
 				color_0: None,
+				normals_0: None,
+				joints_0: None,
+				weights_0: None,
 			},
 			indices,
 			material,
 			mode: None,
+			name: None, // todo
 		});
 
 		PrimitiveIndex(mesh, primitive_index)
 	}
+
+	fn get_primitive(&mut self, primitive: PrimitiveIndex) -> &mut Primitive {
+		&mut self.meshes[primitive.0 .0].primitives[primitive.1]
+	}
+
+	pub fn set_primitive_name(&mut self, primitive: PrimitiveIndex, name: String) {
+		self.get_primitive(primitive).name = Some(name);
+	}
 	pub fn set_primitive_mode(&mut self, primitive: PrimitiveIndex, mode: PrimitiveMode) {
-		self.meshes[primitive.0 .0].primitives[primitive.1].mode = Some(mode);
+		self.get_primitive(primitive).mode = Some(mode);
 	}
 
 	pub fn add_primitive_uvs(&mut self, primitive: PrimitiveIndex, uvs: &[Vec2]) {
 		if uvs.is_empty() {
 			return;
 		}
-		let uvs = self.add_primitive_data(uvs, PrimitiveTarget::Vertices);
-		self.meshes[primitive.0 .0].primitives[primitive.1]
-			.attributes
-			.texcoord_0 = Some(uvs);
+		let uvs = self.add_buffer_data(uvs, PrimitiveTarget::Vertices);
+		self.get_primitive(primitive).attributes.texcoord_0 = Some(uvs);
 	}
 	pub fn add_primitive_colours(&mut self, primitive: PrimitiveIndex, colours: &[[u8; 4]]) {
 		if colours.is_empty() {
 			return;
 		}
-		let colours = self.add_primitive_data(colours, PrimitiveTarget::Vertices);
-		self.meshes[primitive.0 .0].primitives[primitive.1]
-			.attributes
-			.color_0 = Some(colours);
+		let colours = self.add_buffer_data(colours, PrimitiveTarget::Vertices);
+		self.get_primitive(primitive).attributes.color_0 = Some(colours);
+	}
+	pub fn add_primitive_normals(&mut self, primitive: PrimitiveIndex, normals: &[Vec3]) {
+		if normals.is_empty() {
+			return;
+		}
+		let normals = self.add_buffer_data(normals, PrimitiveTarget::Vertices);
+		self.get_primitive(primitive).attributes.normals_0 = Some(normals);
+	}
+
+	pub fn add_primitive_joints(&mut self, primitive: PrimitiveIndex, joints: &[u16]) {
+		let num_joints = joints.len();
+		if num_joints == 0 {
+			return;
+		}
+
+		let joints_index = if joints.iter().any(|i| *i > 255) {
+			let joints: Vec<[u16; 4]> = joints.iter().map(|i| [*i, 0, 0, 0]).collect();
+			self.add_buffer_data(&joints, PrimitiveTarget::Vertices)
+		} else {
+			let joints: Vec<[u8; 4]> = joints.iter().map(|i| [*i as u8, 0, 0, 0]).collect();
+			self.add_buffer_data(&joints, PrimitiveTarget::Vertices)
+		};
+		self.accessors[joints_index.0].normalized = false;
+
+		let byte_length = num_joints * 4;
+
+		let weights_iter = [255, 0, 0, 0].into_iter().cycle();
+
+		let weights_view_index = if let Some(weights_view_index) = self.weights {
+			let weights_view = &mut self.buffer_views[weights_view_index.0];
+			if weights_view.byte_length < byte_length {
+				weights_view.byte_length = byte_length;
+				let weights = &mut self.buffers[weights_view.buffer.0];
+				weights
+					.uri
+					.extend(weights_iter.take(byte_length - weights.byte_length));
+				weights.byte_length = byte_length;
+			}
+			weights_view_index
+		} else {
+			let buffer_index = BufferIndex(self.buffers.len());
+			self.buffers.push(Buffer {
+				uri: weights_iter.take(byte_length).collect(),
+				byte_length,
+			});
+			let view_index = BufferViewIndex(self.buffer_views.len());
+			self.buffer_views.push(BufferView {
+				buffer: buffer_index,
+				byte_length,
+				target: Some(PrimitiveTarget::Vertices as usize),
+				byte_offset: 0,
+			});
+			view_index
+		};
+
+		let weights_index = AccessorIndex(self.accessors.len());
+		type Weights = [u8; 4];
+		self.accessors.push(Accessor {
+			buffer_view: weights_view_index,
+			component_type: Weights::COMPONENT_TYPE,
+			normalized: true,
+			count: num_joints,
+			element_type: Weights::ELEMENT_TYPE,
+			min: AccessorMinMaxValue::Vec4([255.0, 0.0, 0.0, 0.0]),
+			max: AccessorMinMaxValue::Vec4([255.0, 0.0, 0.0, 0.0]),
+		});
+
+		let prim = self.get_primitive(primitive);
+		prim.attributes.joints_0 = Some(joints_index);
+		prim.attributes.weights_0 = Some(weights_index);
 	}
 
 	pub fn create_mesh_from_primitive(
@@ -624,7 +735,7 @@ impl Gltf {
 		material: Option<MaterialIndex>,
 	) -> MeshIndex {
 		let mesh = self.create_mesh(name);
-		let prim = self.add_mesh_primitive(mesh, positions, indices, material);
+		let prim = self.create_mesh_primitive(mesh, None, positions, indices, material);
 		if let Some(uvs) = uvs {
 			self.add_primitive_uvs(prim, uvs);
 		}
@@ -650,14 +761,14 @@ impl Gltf {
 		)
 	}
 	pub fn add_animation_timestamps(&mut self, timestamps: &[f32]) -> AccessorIndex {
-		self.add_primitive_data(timestamps, PrimitiveTarget::AnimationTimestamps)
+		self.add_buffer_data(timestamps, PrimitiveTarget::AnimationTimestamps)
 	}
 
 	pub fn add_animation_translation(
 		&mut self, animation: AnimationIndex, node: NodeIndex, timestamps: AccessorIndex,
 		path: &[Vec3], interpolation: Option<AnimationInterpolationMode>,
 	) {
-		let data = self.add_primitive_data(path, PrimitiveTarget::AnimationData);
+		let data = self.add_buffer_data(path, PrimitiveTarget::AnimationData);
 
 		let anim = &mut self.animations[animation.0];
 		let sampler_index = anim.samplers.len();
@@ -673,6 +784,25 @@ impl Gltf {
 				path: AnimationChannelTargetPath::Translation,
 			},
 		});
+	}
+
+	pub fn create_skin(&mut self, skeleton: NodeIndex) -> SkinIndex {
+		let result = SkinIndex(self.skins.len());
+		self.skins.push(Skin {
+			skeleton,
+			joints: Vec::new(),
+		});
+		result
+	}
+	pub fn set_skin_joints(&mut self, skin: SkinIndex, joints: std::ops::Range<NodeIndex>) {
+		let start = joints.start.0;
+		let end = joints.end.0;
+		self.skins[skin.0]
+			.joints
+			.extend((start..end).map(NodeIndex));
+	}
+	pub fn set_node_skin(&mut self, node: NodeIndex, skin: SkinIndex) {
+		self.nodes[node.0].skin = Some(skin);
 	}
 
 	pub fn combine_buffers(&mut self) {
@@ -707,6 +837,7 @@ impl Gltf {
 		serde_json::to_string(self).unwrap()
 	}
 
+	#[must_use]
 	pub fn get_cube_mesh(&mut self) -> MeshIndex {
 		if let Some(result) = self.debug_cube {
 			return result;
@@ -724,25 +855,6 @@ impl Gltf {
 		);
 		self.debug_cube = Some(result);
 		result
-	}
-
-	pub fn create_points_nodes(
-		&mut self, name: String, points: &[Vec3], parent: Option<NodeIndex>,
-	) -> NodeIndex {
-		let cube = self.get_cube_mesh();
-
-		let container = self.create_node(name, None);
-
-		for (i, &point) in points.iter().enumerate() {
-			let node = self.create_child_node(container, format!("{i}"), Some(cube));
-			self.set_node_position(node, point);
-		}
-
-		if let Some(parent) = parent {
-			self.set_node_parent(parent, container);
-		}
-
-		container
 	}
 }
 
@@ -783,9 +895,9 @@ fn to_uri_mime(data: &[u8], mime: &str) -> String {
 	result
 }
 
-pub trait BufferData: Sized + Copy + PartialOrd + std::fmt::Debug {
+trait BufferData: Sized + Copy + PartialOrd + std::fmt::Debug {
 	const COMPONENT_TYPE: AccessorComponentType;
-	const ACCESSOR_TYPE: AccessorType = AccessorType::Scalar;
+	const ELEMENT_TYPE: AccessorType = AccessorType::Scalar;
 	const NORMALIZED: bool = false;
 
 	type InnerType: Copy + Into<f64>;
@@ -802,7 +914,7 @@ pub trait BufferData: Sized + Copy + PartialOrd + std::fmt::Debug {
 			std::array::from_fn(|i| arr[i].into())
 		}
 		let arr = self.to_array();
-		match Self::ACCESSOR_TYPE {
+		match Self::ELEMENT_TYPE {
 			AccessorType::Scalar => AccessorMinMaxValue::Scalar(value(arr)),
 			AccessorType::Vec2 => AccessorMinMaxValue::Vec2(value(arr)),
 			AccessorType::Vec3 => AccessorMinMaxValue::Vec3(value(arr)),
@@ -886,7 +998,7 @@ impl BufferData for f32 {
 impl<T: BufferData + Into<f64>> BufferData for [T; 2] {
 	const COMPONENT_TYPE: AccessorComponentType = T::COMPONENT_TYPE;
 	const NORMALIZED: bool = T::NORMALIZED;
-	const ACCESSOR_TYPE: AccessorType = AccessorType::Vec2;
+	const ELEMENT_TYPE: AccessorType = AccessorType::Vec2;
 	type InnerType = T;
 	fn to_array(&self) -> &[T] {
 		self
@@ -895,7 +1007,7 @@ impl<T: BufferData + Into<f64>> BufferData for [T; 2] {
 impl<T: BufferData + Into<f64>> BufferData for [T; 3] {
 	const COMPONENT_TYPE: AccessorComponentType = T::COMPONENT_TYPE;
 	const NORMALIZED: bool = T::NORMALIZED;
-	const ACCESSOR_TYPE: AccessorType = AccessorType::Vec3;
+	const ELEMENT_TYPE: AccessorType = AccessorType::Vec3;
 	type InnerType = T;
 	fn to_array(&self) -> &[T] {
 		self
@@ -904,7 +1016,7 @@ impl<T: BufferData + Into<f64>> BufferData for [T; 3] {
 impl<T: BufferData + Into<f64>> BufferData for [T; 4] {
 	const COMPONENT_TYPE: AccessorComponentType = T::COMPONENT_TYPE;
 	const NORMALIZED: bool = T::NORMALIZED;
-	const ACCESSOR_TYPE: AccessorType = AccessorType::Vec4;
+	const ELEMENT_TYPE: AccessorType = AccessorType::Vec4;
 	type InnerType = T;
 	fn to_array(&self) -> &[T] {
 		self
@@ -913,7 +1025,7 @@ impl<T: BufferData + Into<f64>> BufferData for [T; 4] {
 impl<T: BufferData + Into<f64>> BufferData for [T; 3 * 3] {
 	const COMPONENT_TYPE: AccessorComponentType = T::COMPONENT_TYPE;
 	const NORMALIZED: bool = T::NORMALIZED;
-	const ACCESSOR_TYPE: AccessorType = AccessorType::Mat3;
+	const ELEMENT_TYPE: AccessorType = AccessorType::Mat3;
 	type InnerType = T;
 	fn to_array(&self) -> &[T] {
 		self
@@ -922,7 +1034,7 @@ impl<T: BufferData + Into<f64>> BufferData for [T; 3 * 3] {
 impl<T: BufferData + Into<f64>> BufferData for [T; 4 * 4] {
 	const COMPONENT_TYPE: AccessorComponentType = T::COMPONENT_TYPE;
 	const NORMALIZED: bool = T::NORMALIZED;
-	const ACCESSOR_TYPE: AccessorType = AccessorType::Mat4;
+	const ELEMENT_TYPE: AccessorType = AccessorType::Mat4;
 	type InnerType = T;
 	fn to_array(&self) -> &[T] {
 		self
@@ -931,7 +1043,7 @@ impl<T: BufferData + Into<f64>> BufferData for [T; 4 * 4] {
 
 impl BufferData for Vec3 {
 	const COMPONENT_TYPE: AccessorComponentType = AccessorComponentType::Float;
-	const ACCESSOR_TYPE: AccessorType = AccessorType::Vec3;
+	const ELEMENT_TYPE: AccessorType = AccessorType::Vec3;
 	type InnerType = f32;
 	fn to_array(&self) -> &[Self::InnerType] {
 		self.as_slice()

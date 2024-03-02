@@ -15,3 +15,15 @@ fall3d colours (zoom, flare)
 fall3d dedup shared assets
 misc
 make texture holder return full frames and path by ref
+check bsp translucency tree ordering
+
+
+zoom transparencies:
+	fading to white
+	first index is white
+0h,  0h,  0h,  0h,
+0h,  0h,  0h,  0h,
+3h,  6h,  Ch, 12h,
+18h, 30h, 48h, 60h,
+78h, 90h, A8h, C0h,
+D7h, E6h, F5h, FFh

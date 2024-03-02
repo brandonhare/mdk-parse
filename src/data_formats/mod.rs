@@ -9,7 +9,7 @@ mod wav;
 pub use animation::Animation;
 pub use bsp::Bsp;
 pub use image_formats::parse_animation;
-pub use mesh::{Mesh, TextureHolder, TextureResult};
+pub use mesh::{Materials, Mesh, ResolvedMaterial};
 pub use spline::Spline;
 pub use texture::Texture;
 pub use wav::{SoundInfo, Wav};

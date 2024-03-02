@@ -87,7 +87,7 @@ impl<'a> Cmi<'a> {
 				let mut mesh_reader = reader.clone_at(offset);
 				let is_multimesh = mesh_reader.u32();
 				assert!(is_multimesh <= 1);
-				Some(Mesh::parse(&mut mesh_reader, is_multimesh != 0))
+				Some(Mesh::parse(&mut mesh_reader, name, is_multimesh != 0))
 			};
 
 			let new_entity = result
@@ -273,7 +273,7 @@ impl<'a> Cmi<'a> {
 
 			// save mesh
 			if let Some(mesh) = &entity.mesh {
-				mesh.save_as(entity_name, &mut output);
+				mesh.save_as(entity_name, &mut output, None, &[]); // todo local anims
 			}
 
 			// save animations

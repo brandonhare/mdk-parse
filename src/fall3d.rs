@@ -1,11 +1,59 @@
 use std::fmt::Write;
 
+use crate::Reader;
 use crate::data_formats::image_formats::ColourMap;
 use crate::data_formats::{Texture, TextureHolder, TextureResult};
 use crate::file_formats::mti::Material;
 use crate::file_formats::{Bni, Mti, Sni};
 use crate::output_writer::OutputWriter;
-use crate::Reader;
+
+// combine flare and zoom images into an animation
+fn combine_animation_frames(bni: &mut Bni) {
+	let mut flare = Vec::new();
+	let mut zoom = Vec::new();
+	bni.textures.retain(|(name, tex)| {
+		if let Some(flare_num) = name.strip_prefix("FLARE") {
+			let flare_index: usize = flare_num
+				.parse::<usize>()
+				.expect("bad flare suffix")
+				.checked_sub(1)
+				.expect("bad flare index");
+			if flare_index <= flare.len() {
+				flare.resize_with(flare_index + 1, Default::default);
+			}
+			flare[flare_index] = tex.clone();
+			false
+		} else if let Some(zoom_num) = name.strip_prefix("ZOOM") {
+			let zoom_index: usize = zoom_num.parse::<usize>().expect("bad flare suffix");
+			if zoom_index <= zoom.len() {
+				zoom.resize_with(zoom_index + 1, Default::default);
+			}
+			zoom[zoom_index] = tex.clone();
+			false
+		} else {
+			true
+		}
+	});
+
+	assert!(flare.iter().all(|tex| tex != &Default::default()));
+	assert!(zoom.iter().all(|tex| tex != &Default::default()));
+
+	// center flare anim
+	let (flare_width, flare_height) = flare
+		.iter()
+		.fold((0, 0), |(w, h), tex| (w.max(tex.width), h.max(tex.height)));
+	for tex in &mut flare {
+		tex.position = (
+			(flare_width - tex.width) as i16 / -2,
+			(flare_height - tex.height) as i16 / -2,
+		);
+	}
+
+	// todo: figure out the palettes for these animations
+
+	bni.animations_2d.push(("FLARE", flare));
+	bni.animations_2d.push(("ZOOM", zoom));
+}
 
 pub fn parse_fall3d(save_sounds: bool, save_textures: bool, save_meshes: bool) {
 	let output = OutputWriter::new("assets/FALL3D", true);
@@ -23,9 +71,11 @@ pub fn parse_fall3d(save_sounds: bool, save_textures: bool, save_meshes: bool) {
 	}
 
 	let bni = std::fs::read("assets/FALL3D/FALL3D.BNI").unwrap();
-	let bni = Bni::parse(Reader::new(&bni));
+	let mut bni = Bni::parse(Reader::new(&bni));
 
 	if save_textures {
+		combine_animation_frames(&mut bni);
+
 		let mut tex_output = shared_output.push_dir("Textures");
 		let spacepal = bni
 			.palettes

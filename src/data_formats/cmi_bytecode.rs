@@ -7,7 +7,7 @@ struct FlagNames<'a> {
 	names: &'a [(u32, &'a str)],
 	value: u32,
 }
-impl<'a> std::fmt::Display for FlagNames<'a> {
+impl std::fmt::Display for FlagNames<'_> {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		let mut first = true;
 		let mut rest = self.value;
@@ -1330,9 +1330,7 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 					let value3 = reader.u8();
 					let has_target = value3 & 2 != 0;
 					let [v4, v5, v6]: [u8; 3] = reader.get();
-					let value3 = (value3 as usize)
-						| (v4 as usize) << 8 | (v5 as usize) << 0x10
-						| (v6 as usize) << 0x18;
+					let value3 = (value3 as usize) | ((v4 as usize) << 8) | ((v5 as usize) << 0x10) | ((v6 as usize) << 0x18);
 					if has_target {
 						let target = reader.u32();
 						let target = push_block(&mut blocks, target);

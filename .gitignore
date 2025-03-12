@@ -1,0 +1,5 @@
+/output
+/target
+/assets
+/Cargo.lock
+.DS_Store

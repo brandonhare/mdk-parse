@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 use std::fmt::Write;
 
+use crate::data_formats::image_formats::try_parse_palette_image;
 use crate::data_formats::{
-	image_formats::ColourMap, Mesh, SoundInfo, Texture, TextureHolder, TextureResult,
+	Mesh, SoundInfo, Texture, TextureHolder, TextureResult, image_formats::ColourMap,
 };
 use crate::file_formats::{
-	mti::{Material, Mti, Pen},
 	Bni, Cmi, Dti, Fti, Mto, Sni,
+	mti::{Material, Mti, Pen},
 };
 use crate::{output_writer::OutputWriter, reader::Reader};
 
@@ -347,9 +348,11 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 						let tex = self.textures[name];
 						let width = tex[0].width;
 						let height = tex[0].height;
-						assert!(tex[1..]
-							.iter()
-							.all(|t| t.width == width && t.height == height));
+						assert!(
+							tex[1..]
+								.iter()
+								.all(|t| t.width == width && t.height == height)
+						);
 						let masked = tex
 							.iter()
 							.any(|frames| frames.pixels.iter().any(|p| *p == 0));
@@ -525,6 +528,16 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 					}
 				}
 			}
+
+			// load and save loading image
+			temp_filename.clear();
+			write!(&mut temp_filename, "assets/MISC/LOAD_{level_index}.LBB").unwrap();
+			let load_image = std::fs::read(&temp_filename).unwrap();
+			let (load_pal, load_image) =
+				try_parse_palette_image(&mut Reader::new(&load_image)).unwrap();
+			temp_filename.clear();
+			write!(&mut temp_filename, "LOAD_{level_index}").unwrap();
+			load_image.save_as(&temp_filename, &mut tex_output, Some(load_pal));
 		}
 
 		all_palettes.extend(palettes);

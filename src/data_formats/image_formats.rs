@@ -1,5 +1,5 @@
-use crate::data_formats::Texture;
 use crate::Reader;
+use crate::data_formats::Texture;
 
 pub fn parse_animation(reader: &mut Reader) -> Vec<Texture<'static>> {
 	try_parse_animation(reader).expect("failed to parse animation")
@@ -107,28 +107,29 @@ pub fn try_parse_overlay_image(reader: &mut Reader) -> Option<Texture<'static>> 
 
 	let mut pixels = Vec::with_capacity(num_pixels);
 	loop {
-		let index = reader.try_u16()?;
+		let index = reader.try_u16()? as usize;
 		if index & 0x8000 != 0x8000 {
-			for _ in 0..4 * index {
-				pixels.push(reader.try_u8()?);
+			if pixels.len() + 4 * index > num_pixels {
+				return None;
 			}
+			pixels.extend_from_slice(reader.try_slice(4 * index)?);
+			continue;
+		} else if index & 0xFF00 != 0xFF00 {
+			let new_len = pixels.len() + (index & 0xFFF);
+			if new_len > num_pixels {
+				return None;
+			}
+			pixels.resize(new_len, 0);
 			continue;
 		}
-		if index & 0xFF00 != 0xFF00 {
-			pixels.resize_with(pixels.len() + (index as usize & 0xFFF), Default::default);
-			continue;
-		}
+
 		let index = index & 0xFF;
 		if index == 0 {
 			break;
-		}
-		for _ in 0..index {
-			pixels.push(reader.try_u8()?);
-		}
-
-		if pixels.len() > num_pixels {
+		} else if pixels.len() + index > num_pixels {
 			return None;
 		}
+		pixels.extend_from_slice(reader.try_slice(index)?);
 	}
 	reader.align(4);
 

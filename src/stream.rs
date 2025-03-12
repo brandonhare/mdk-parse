@@ -1,7 +1,7 @@
-use crate::data_formats::{image_formats::ColourMap, Texture, TextureHolder, TextureResult};
+use crate::data_formats::{Texture, TextureHolder, TextureResult, image_formats::ColourMap};
 use crate::file_formats::{
-	mti::{Material, Mti, Pen},
 	Bni,
+	mti::{Material, Mti, Pen},
 };
 use crate::{OutputWriter, Reader};
 use std::fmt::Write;
@@ -141,12 +141,12 @@ pub fn parse_stream(save_sounds: bool, save_textures: bool, save_meshes: bool) {
 			mesh.save_textured_as(name, &mut output, &mut textures);
 		}
 		let mut output = output.push_dir("Animations");
-		for (name, anim) in bni.animations_3d {
+		for (name, anim) in &bni.animations_3d {
 			anim.save_as(name, &mut output);
 		}
 	} else {
 		// gather textures to save
-		for (_, mesh) in bni.meshes {
+		for (_, mesh) in &bni.meshes {
 			for name in &mesh.materials {
 				textures.lookup(name);
 			}

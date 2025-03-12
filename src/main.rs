@@ -18,14 +18,14 @@ use reader::Reader;
 use vectors::{Vec2, Vec3};
 
 struct DataFile<'a>(&'a Path, Vec<u8>);
-impl<'a> std::ops::Deref for DataFile<'a> {
+impl std::ops::Deref for DataFile<'_> {
 	type Target = [u8];
 	fn deref(&self) -> &Self::Target {
 		&self.1
 	}
 }
 #[cfg(feature = "readranges")]
-impl<'a> Drop for DataFile<'a> {
+impl Drop for DataFile<'_> {
 	fn drop(&mut self) {
 		let buf_range = self.1.as_ptr_range();
 		let buf_range = buf_range.start as usize..buf_range.end as usize;
@@ -194,9 +194,9 @@ fn main() {
 	let save_sounds = true;
 	let save_textures = true;
 	let save_meshes = true;
-	//stream::parse_stream(save_sounds, save_textures, save_meshes);
+	stream::parse_stream(save_sounds, save_textures, save_meshes);
 	traverse::parse_traverse(save_sounds, save_textures, save_meshes);
-	//fall3d::parse_fall3d(save_sounds, save_textures, save_meshes);
+	fall3d::parse_fall3d(save_sounds, save_textures, save_meshes);
 
 	//for_all_ext("assets", "dti", parse_dti);
 	//for_all_ext("assets", "bni", parse_bni);

@@ -80,7 +80,7 @@ impl<'a> Wav<'a> {
 	}
 }
 
-impl<'a> SoundInfo<'a> {
+impl SoundInfo<'_> {
 	pub fn save_as(&self, name: &str, output: &mut OutputWriter) {
 		self.wav.save_as(name, output)
 	}

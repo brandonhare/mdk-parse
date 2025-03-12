@@ -1,4 +1,4 @@
-use crate::data_formats::{image_formats, Animation, Mesh, Texture, Wav};
+use crate::data_formats::{Animation, Mesh, Texture, Wav, image_formats};
 use crate::{OutputWriter, Reader};
 
 pub struct Bni<'a> {
@@ -14,10 +14,10 @@ pub struct Bni<'a> {
 	pub unknowns: Vec<(&'a str, &'a [u8])>,
 }
 
-impl<'a> std::fmt::Debug for Bni<'a> {
+impl std::fmt::Debug for Bni<'_> {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		struct Named<'a, T>(&'a [(&'a str, T)]);
-		impl<'a, T> std::fmt::Debug for Named<'a, T> {
+		impl<T> std::fmt::Debug for Named<'_, T> {
 			fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 				f.debug_list()
 					.entries(self.0.iter().map(|(name, _)| *name))
@@ -255,7 +255,7 @@ impl<'a> Bni<'a> {
 		});
 
 		save_items("strings", output, &self.strings, |name, strings, output| {
-			output.write(name, "txt", &strings.join("\n"));
+			output.write(name, "txt", strings.join("\n"));
 		});
 
 		save_items("unknown", output, &self.unknowns, |name, item, output| {

@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use crate::OutputWriter;
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Default, Clone, PartialEq, Eq)]
 pub struct Texture<'a> {
 	pub width: u16,
 	pub height: u16,

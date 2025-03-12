@@ -1,4 +1,4 @@
-use crate::{data_formats::Texture, OutputWriter, Reader, Vec3};
+use crate::{OutputWriter, Reader, Vec3, data_formats::Texture};
 
 pub struct Dti<'a> {
 	pub filename: &'a str,
@@ -58,8 +58,7 @@ pub struct Teleport {
 	pub angle: f32,
 }
 
-impl<'a> Dti<'a> {
-	#[allow(clippy::field_reassign_with_default)]
+impl Dti<'_> {
 	pub fn parse(mut data: Reader) -> Dti {
 		let filesize = data.u32() + 4;
 		data.rebase();
@@ -282,7 +281,14 @@ impl<'a> Dti<'a> {
 		use std::fmt::Write;
 		let mut info = format!(
 			"name: {}\n\nplayer start arena: {}, pos: {}, angle: {}\ntranslucent colours: {:?}\npalette free rows: {}\n\n{:#?}\n\narenas ({}):\n",
-			self.filename, self.player_start_arena_index, self.player_start_pos, self.player_start_angle, self.translucent_colours, self.num_pal_free_pixels / 16, self.sky_info, self.arenas.len()
+			self.filename,
+			self.player_start_arena_index,
+			self.player_start_pos,
+			self.player_start_angle,
+			self.translucent_colours,
+			self.num_pal_free_pixels / 16,
+			self.sky_info,
+			self.arenas.len()
 		);
 
 		for (arena_index, arena) in self.arenas.iter().enumerate() {

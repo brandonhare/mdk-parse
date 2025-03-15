@@ -55,6 +55,21 @@ fn combine_animation_frames(bni: &mut Bni) {
 	bni.animations_2d.push(("ZOOM", zoom));
 }
 
+const ZOOM_ENTRIES: usize = 17;
+static ZOOM_TRANSPARENCIES: [u8; ZOOM_ENTRIES] = [
+	/*0, 0, 0, 0, 0, 0, 0,*/
+	0, 0x3, 0x6, 0xC, 0x12, 0x18, 0x30, 0x48, 0x60, 0x78, 0x90, 0xA8, 0xC0, 0xD7, 0xE6, 0xF5, 0xFF,
+];
+static ZOOM_PAL: [u8; ZOOM_ENTRIES * 4] = const {
+	let mut result = [255; ZOOM_ENTRIES * 4];
+	let mut i = 0;
+	while i < ZOOM_ENTRIES {
+		result[ZOOM_ENTRIES * 3 + i] = ZOOM_TRANSPARENCIES[i];
+		i += 1;
+	}
+	result
+};
+
 pub fn parse_fall3d(save_sounds: bool, save_textures: bool, save_meshes: bool) {
 	let output = OutputWriter::new("assets/FALL3D", true);
 	let shared_output = output.push_dir("Shared");
@@ -77,6 +92,7 @@ pub fn parse_fall3d(save_sounds: bool, save_textures: bool, save_meshes: bool) {
 		combine_animation_frames(&mut bni);
 
 		let mut tex_output = shared_output.push_dir("Textures");
+		let mut anim_output = shared_output.push_dir("Animations");
 		let spacepal = bni
 			.palettes
 			.iter()
@@ -84,8 +100,15 @@ pub fn parse_fall3d(save_sounds: bool, save_textures: bool, save_meshes: bool) {
 			.unwrap()
 			.1;
 		tex_output.write_palette("SPACEPAL", spacepal);
+
 		for (name, frames) in &bni.animations_2d {
-			Texture::save_animated(frames, name, 24, &mut tex_output, Some(spacepal));
+			let pal = if *name == "ZOOM" || *name == "FLARE" {
+				&ZOOM_PAL
+			} else {
+				spacepal
+			};
+
+			Texture::save_animated(frames, name, 24, &mut anim_output, Some(pal));
 		}
 		for (name, tex) in &bni.textures {
 			tex.save_as(name, &mut tex_output, Some(spacepal));

@@ -111,8 +111,18 @@ fn setup_png<'a>(
 	);
 	if let Some(palette) = palette {
 		encoder.set_color(png::ColorType::Indexed);
-		encoder.set_palette(std::borrow::Cow::Borrowed(palette));
-		encoder.set_trns([0].as_slice());
+		if palette.len() == 768 {
+			// 256 byte rgb palette
+			encoder.set_palette(std::borrow::Cow::Borrowed(palette));
+			encoder.set_trns([0].as_slice());
+		} else {
+			// todo hack: rgba palette, sorted as rgbrgbrgb...aaaaaa
+			assert_eq!(palette.len() % 4, 0);
+			let num_entries = palette.len() / 4;
+			let (rgb, a) = palette.split_at(num_entries * 3);
+			encoder.set_palette(rgb);
+			encoder.set_trns(a);
+		}
 	} else {
 		encoder.set_color(png::ColorType::Grayscale);
 	}

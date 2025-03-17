@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt::Write;
 
 use crate::data_formats::cmi_bytecode::CmiCallOrigin;
-use crate::data_formats::{cmi_bytecode, Animation, Mesh, Spline};
+use crate::data_formats::{Animation, Mesh, Spline, cmi_bytecode};
 use crate::{OutputWriter, Reader};
 
 #[derive(Default)]
@@ -190,15 +190,13 @@ impl<'a> Cmi<'a> {
 			entity.scripts.push(target_offset);
 			entity.arenas.push(origin.arena_name);
 
-			if origin.target_name != origin.arena_name {
-				result
-					.arenas
-					.iter_mut()
-					.find(|a| a.name == origin.arena_name)
-					.unwrap()
-					.entities
-					.push(origin.target_name);
-			}
+			result
+				.arenas
+				.iter_mut()
+				.find(|a| a.name == origin.arena_name)
+				.unwrap()
+				.entities
+				.push(origin.target_name);
 
 			script.call_origins.push(origin);
 		}
@@ -377,5 +375,138 @@ impl<'a> Cmi<'a> {
 				}
 			}
 		}
+	}
+
+	pub fn save_scripts(&self, output: &mut OutputWriter) {
+		debug_assert!(self.validate_entity_references());
+
+		let mut arena_outputs = vec![None; self.arenas.len()];
+		let mut shared_output = None;
+
+		let mut temp_filename = String::new();
+		let mut temp_data = String::new();
+		let mut temp_reason_list: Vec<&str> = Vec::new();
+		let mut temp_arena_list: Vec<&str> = Vec::new();
+
+		// songs report
+		for arena in &self.arenas {
+			writeln!(&mut temp_data, "{}: {}", arena.name, arena.song).unwrap();
+		}
+		output.write("Songs", "txt", &temp_data);
+
+		for (&entity_name, entity) in self.entities.iter() {
+			if entity.scripts.is_empty() {
+				assert!(entity.splines.is_empty());
+				continue;
+			}
+			for script_offset in &entity.scripts {
+				let script = &self.scripts[script_offset];
+
+				temp_data.clear();
+				temp_data.push_str("Called by:\n");
+
+				let mut shared = false;
+
+				// create filename from reasons
+				temp_reason_list.clear();
+				temp_arena_list.clear();
+				for origin in &script.call_origins {
+					if origin.target_name == entity_name {
+						temp_reason_list.push(&origin.reason);
+						temp_arena_list.push(origin.arena_name);
+						writeln!(
+							temp_data,
+							"\t[{}] from {} ({:06X}): {}",
+							origin.arena_name,
+							origin.source_name,
+							origin.source_offset,
+							origin.reason
+						)
+						.unwrap();
+					} else if *script_offset != 0 {
+						shared = true;
+					}
+				}
+				temp_reason_list.sort_unstable();
+				temp_reason_list.dedup();
+				temp_arena_list.sort_unstable();
+				temp_arena_list.dedup();
+				temp_filename.clear();
+
+				let output = if let [arena_name] = temp_arena_list.as_slice() {
+					let index = self
+						.arenas
+						.iter()
+						.position(|a| a.name == *arena_name)
+						.unwrap();
+					arena_outputs[index].get_or_insert_with(|| output.push_dir(arena_name))
+				} else {
+					shared_output.get_or_insert_with(|| output.push_dir("Shared"))
+				};
+				let mut output = output.push_dir(entity_name);
+
+				write!(temp_filename, "{script_offset:06X}").unwrap();
+				for reason in &temp_reason_list {
+					write!(temp_filename, " {reason}").unwrap();
+				}
+
+				if shared {
+					temp_data.push_str("\nShared by:\n");
+					for origin in &script.call_origins {
+						if origin.target_name != entity_name {
+							writeln!(
+								temp_data,
+								"\t[{}] {} from {} ({:06X}): {}",
+								origin.arena_name,
+								origin.target_name,
+								origin.source_name,
+								origin.source_offset,
+								origin.reason
+							)
+							.unwrap();
+						}
+					}
+				}
+
+				temp_data.push('\n');
+				temp_data.push_str(&script.summary);
+
+				output.write(&temp_filename, "txt", &temp_data);
+
+				// save splines
+				for path_offset in &script.path_offsets {
+					temp_filename.clear();
+					write!(&mut temp_filename, "{path_offset:06X}").unwrap();
+					let spline = &self.splines[path_offset];
+					spline.save_as(&temp_filename, &mut output.push_dir("Splines"));
+				}
+			}
+		}
+	}
+
+	fn validate_entity_references(&self) -> bool {
+		for arena in &self.arenas {
+			let arena_name = arena.name;
+			for entity_name in &arena.entities {
+				assert!(
+					self.entities[entity_name].arenas.contains(&arena_name),
+					"entity {entity_name} is missing arena {arena_name}"
+				);
+			}
+		}
+		for (entity_name, entity) in self.entities.iter() {
+			for &arena_name in &entity.arenas {
+				assert!(
+					self.arenas
+						.iter()
+						.find(|arena| arena_name == arena.name)
+						.unwrap()
+						.entities
+						.contains(entity_name),
+					"arena {arena_name} is missing entity {entity_name}"
+				);
+			}
+		}
+		true
 	}
 }

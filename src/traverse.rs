@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::Write;
 
-use crate::data_formats::image_formats::try_parse_palette_image;
 use crate::data_formats::{
 	Mesh, SoundInfo, Texture, TextureHolder, TextureResult, image_formats::ColourMap,
 };
@@ -73,9 +72,10 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 	let mut temp_filename = String::new();
 
 	for level_index in 3usize..=8 {
+		println!("  Parsing traverse level {level_index}...");
 		temp_filename.clear();
 		write!(temp_filename, "assets/TRAVERSE/LEVEL{level_index}").unwrap();
-		let output = OutputWriter::new(&temp_filename, true);
+		let mut output = OutputWriter::new(&temp_filename, true);
 
 		let mut read_file = |ext| {
 			temp_filename.clear();
@@ -146,16 +146,25 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 		{
 			let mut palette_output = output.push_dir("Palettes");
 			for arena in &mto.arenas {
+				let cmi_arena = cmi
+					.arenas
+					.iter_mut()
+					.find(|cmi_arena| cmi_arena.name == arena.name)
+					.unwrap();
 				for (mesh_name, mesh) in &arena.meshes {
-					all_meshes.insert(mesh_name, mesh);
+					let dup = all_meshes.insert(mesh_name, mesh);
+					assert!(dup.is_none_or(|m| mesh == m), "duplicate mesh {mesh_name}");
 					// register mesh as belonging to this arena
 					let entity_arenas = &mut cmi.entities.entry(mesh_name).or_default().arenas;
 					if !entity_arenas.contains(&arena.name) {
 						entity_arenas.push(arena.name);
 						entity_arenas.sort_unstable();
+						assert!(!cmi_arena.entities.contains(mesh_name));
+						cmi_arena.entities.push(mesh_name);
 					}
 				}
-				all_meshes.insert(arena.name, &arena.bsp.mesh);
+				let dup = all_meshes.insert(arena.name, &arena.bsp.mesh);
+				assert!(dup.is_none(), "duplicate arena mesh {}", arena.name);
 				assert!(
 					cmi.entities
 						.entry(arena.name)
@@ -201,23 +210,39 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 			let arena_name = &corridor_name[1..];
 
 			let entity = cmi.entities.entry(corridor_name).or_default();
-			if entity.arenas == [*corridor_name] {
+			if entity.arenas.contains(corridor_name) {
 				// referenced in cmi, add a new palette
-				let pal = palettes.get(arena_name).unwrap();
+				let pal = &palettes[arena_name];
 				palettes.insert(corridor_name.to_string(), pal.clone());
 			} else {
 				// not referenced anywhere, add to parent arena
-				all_meshes.insert(*corridor_name, &bsp.mesh);
+				let dup = all_meshes.insert(*corridor_name, &bsp.mesh);
+				assert!(dup.is_none(), "duplicate corridor mesh {corridor_name}");
 				entity.arenas.push(arena_name);
+				cmi.arenas
+					.iter_mut()
+					.find(|arena| arena.name == arena_name)
+					.unwrap()
+					.entities
+					.push(corridor_name);
 			}
 		}
 		assert!(sni_s.bsps.is_empty(), "unexpected bsps in sni_s");
 
-		all_meshes.extend(
-			cmi.entities
-				.iter()
-				.filter_map(|(&name, entity)| entity.mesh.as_ref().map(|mesh| (name, mesh))),
-		);
+		// add cmi meshes (including arena meshes added above)
+		for (name, entity) in &cmi.entities {
+			let Some(ref mesh) = entity.mesh else {
+				continue;
+			};
+			let dup = all_meshes.insert(name, mesh);
+			assert!(dup.is_none(), "duplicate cmi mesh {name}");
+		}
+
+		// save level info
+		dti.save_info_as("Level Info", &mut output);
+
+		// save scripts
+		cmi.save_scripts(&mut output.push_dir("Scripts"));
 
 		// save sounds
 		if save_sounds {
@@ -279,7 +304,7 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 							);
 						}
 					} else if !all_pens.contains_key(tex_name) {
-						println!("level {level_index} mesh {name} missing material {tex_name}"); // todo
+						// the ramp to the boss room in LEVEL3 (really level2) is missing a texture
 					}
 				}
 			}
@@ -529,15 +554,20 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 				}
 			}
 
+			/*
 			// load and save loading image
 			temp_filename.clear();
 			write!(&mut temp_filename, "assets/MISC/LOAD_{level_index}.LBB").unwrap();
 			let load_image = std::fs::read(&temp_filename).unwrap();
 			let (load_pal, load_image) =
-				try_parse_palette_image(&mut Reader::new(&load_image)).unwrap();
+				crate::data_formats::image_formats::try_parse_palette_image(&mut Reader::new(
+					&load_image,
+				))
+				.unwrap();
 			temp_filename.clear();
 			write!(&mut temp_filename, "LOAD_{level_index}").unwrap();
 			load_image.save_as(&temp_filename, &mut tex_output, Some(load_pal));
+			*/
 		}
 
 		all_palettes.extend(palettes);

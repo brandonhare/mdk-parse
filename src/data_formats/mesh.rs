@@ -1,17 +1,19 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use crate::data_formats::{image_formats::ColourMap, Texture};
+use crate::data_formats::{Texture, image_formats::ColourMap};
 use crate::file_formats::mti::Pen;
 use crate::gltf::AlphaMode;
-use crate::{gltf, OutputWriter, Reader, Vec2, Vec3};
+use crate::{OutputWriter, Reader, Vec2, Vec3, gltf};
 
+#[derive(PartialEq)]
 pub struct Mesh<'a> {
 	pub materials: Vec<&'a str>,
 	pub mesh_data: MeshType<'a>,
 	pub reference_points: Vec<Vec3>,
 }
 
+#[derive(PartialEq)]
 pub enum MeshType<'a> {
 	Single(MeshGeo),
 	Multimesh {
@@ -20,7 +22,7 @@ pub enum MeshType<'a> {
 	},
 }
 
-#[derive(Default)]
+#[derive(Default, PartialEq)]
 pub struct MeshGeo {
 	pub verts: Vec<Vec3>,
 	pub tris: Vec<MeshTri>,
@@ -147,7 +149,7 @@ impl MeshGeo {
 	}
 }
 
-#[derive(Default)]
+#[derive(Default, PartialEq)]
 pub struct Submesh<'a> {
 	pub mesh_data: MeshGeo,
 	pub name: Cow<'a, str>,
@@ -164,7 +166,7 @@ const TRIFLAG_OUTLINE_MASK: u32 = 0xF0_00_00;
 const TRIFLAG_ID_MASK: u32 = 0xFF_00_00_00;
 const TRIFLAG_ID_SHIFT: usize = 24;
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct MeshTri {
 	pub indices: [u16; 3],
 	pub material: Pen,
@@ -525,7 +527,7 @@ impl<'a> Mesh<'a> {
 					let texture_index = texture_index as usize;
 					let mat = &mut materials[texture_index];
 					match &mat.0 {
-						TextureResult::None => tri_mat = Pen::Colour(0xFF), // todo check in-game missing texture
+						TextureResult::None => tri_mat = Pen::Colour(0xFF), // missing textures are white in-game (e.g. ramp to level 2 boss)
 						TextureResult::Pen(pen) => tri_mat = *pen,
 						TextureResult::SaveRef {
 							width,

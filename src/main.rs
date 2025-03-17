@@ -152,6 +152,7 @@ fn parse_lbb(path: &Path) {
 }
 
 fn parse_video(path: &Path) {
+	println!("  Converting {}...", path.display());
 	let mut output_path = OutputWriter::get_output_path(path);
 	output_path.set_extension("mp4");
 	let _ = std::fs::create_dir_all(output_path.with_file_name(""));
@@ -180,7 +181,7 @@ fn parse_video(path: &Path) {
 			}
 		}
 		Err(e) => {
-			eprintln!("failed to convert {path:?}: {e}");
+			eprintln!("failed to run ffmpeg: {e}");
 		}
 	}
 }
@@ -194,21 +195,27 @@ fn main() {
 	let save_sounds = true;
 	let save_textures = true;
 	let save_meshes = true;
-	stream::parse_stream(save_sounds, save_textures, save_meshes);
+
+	println!("Parsing traverse data...");
 	traverse::parse_traverse(save_sounds, save_textures, save_meshes);
+
+	println!("Parsing stream data...");
+	stream::parse_stream(save_sounds, save_textures, save_meshes);
+
+	println!("Parsing fall3d data...");
 	fall3d::parse_fall3d(save_sounds, save_textures, save_meshes);
 
-	//for_all_ext("assets", "dti", parse_dti);
-	//for_all_ext("assets", "bni", parse_bni);
-	//for_all_ext("assets", "mto", parse_mto);
-	//for_all_ext("assets", "sni", parse_sni);
-	//for_all_ext("assets", "mti", parse_mti);
-	//for_all_ext("assets", "cmi", parse_cmi);
+	println!("Parsing misc data...");
+	// todo export properly
+	for_all_ext("assets/MISC", "bni", parse_bni);
+	for_all_ext("assets/MISC", "sni", parse_sni);
+	for_all_ext("assets/MISC", "lbb", parse_lbb);
+	for_all_ext("assets/MISC", "mti", parse_mti); // todo export with palette from bni
+	for_all_ext("assets/MISC", "fti", parse_fti);
 
-	//for_all_ext("assets", "fti", parse_fti);
-	//for_all_ext("assets", "lbb", parse_lbb);
-	//for_all_ext("assets", "flc", parse_video);
-	//for_all_ext("assets", "mve", parse_video);
+	println!("Converting videos with ffmpeg...");
+	for_all_ext("assets", "flc", parse_video);
+	for_all_ext("assets", "mve", parse_video);
 
-	eprintln!("done in {:.2?}", start_time.elapsed());
+	println!("Done in {:.2?}", start_time.elapsed());
 }

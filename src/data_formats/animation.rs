@@ -1,4 +1,4 @@
-use crate::{gltf, OutputWriter, Reader, Vec3};
+use crate::{OutputWriter, Reader, Vec3, gltf};
 
 pub struct Animation<'a> {
 	pub speed: f32,

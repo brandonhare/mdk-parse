@@ -1,4 +1,4 @@
-use crate::data_formats::{parse_animation, Bsp, SoundInfo, Texture, Wav};
+use crate::data_formats::{Bsp, SoundInfo, Texture, Wav, parse_animation};
 use crate::{OutputWriter, Reader};
 
 pub struct Sni<'a> {

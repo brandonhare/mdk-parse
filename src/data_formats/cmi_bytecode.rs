@@ -314,13 +314,13 @@ pub struct CmiScript<'a> {
 	pub call_origins: Vec<CmiCallOrigin<'a>>, // used by caller cmi
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CmiCalledScript<'a> {
 	pub target_offset: u32,
 	pub target_name: &'a str,
 	pub reason: &'static str,
 }
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CmiCallOrigin<'a> {
 	pub arena_name: &'a str,
 	pub source_name: &'a str,
@@ -403,7 +403,9 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 						}
 					};
 					// todo what are all these
-					wl!("Set path] v1: {value1}, v2: {value2}, v3: {value3}, vec: {vec:?}, path offset: {path_offset:06X}");
+					wl!(
+						"Set path] v1: {value1}, v2: {value2}, v3: {value3}, vec: {vec:?}, path offset: {path_offset:06X}"
+					);
 				}
 				0x03 => {
 					let anim_offset = reader.u32();
@@ -498,7 +500,9 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 					let name = reader.pascal_str();
 					let index = reader.u8();
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Branch if alien with name at index] name: {name}, index: {index}, {branch}");
+					wl!(
+						"Branch if alien with name at index] name: {name}, index: {index}, {branch}"
+					);
 				}
 				0x0B => {
 					let value = reader.u8();
@@ -612,11 +616,7 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 					w!("Show parts] names: [");
 					for i in 0..count {
 						let name = reader.pascal_str();
-						if i != 0 {
-							w!(", {name}")
-						} else {
-							w!("{name}")
-						}
+						if i != 0 { w!(", {name}") } else { w!("{name}") }
 					}
 					wl!("]");
 				}
@@ -751,7 +751,9 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 					let name2 = reader.pascal_str();
 					let target = read_ext_block(reader, offsets, name2, "Spawn (3D)");
 					if has_name == 0 {
-						wl!("Spawn badguy] point index: {point_index}, name: {name2}, target: {target}");
+						wl!(
+							"Spawn badguy] point index: {point_index}, name: {name2}, target: {target}"
+						);
 					} else {
 						wl!("Spawn badguy] target name: {name1}, name: {name2}, target: {target}");
 					}
@@ -878,7 +880,9 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 					let max_dist = reader.u16();
 					let angle = reader.u8();
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Branch if visible] min dist: {min_dist}, max dist: {max_dist}, angle: {angle}, {branch}");
+					wl!(
+						"Branch if visible] min dist: {min_dist}, max dist: {max_dist}, angle: {angle}, {branch}"
+					);
 				}
 				0x58 => {
 					let value = reader.u8();
@@ -963,7 +967,9 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 					let min_pos = reader.vec2();
 					let max_pos = reader.vec2();
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Branch on player in square] min XY: {min_pos:?}, max XY: {max_pos:?}, {branch}");
+					wl!(
+						"Branch on player in square] min XY: {min_pos:?}, max XY: {max_pos:?}, {branch}"
+					);
 				}
 				0x61 => {
 					let on = reader.u8();
@@ -981,7 +987,9 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 					let trigger_index = (reader.i8() - 1) % 16;
 					let id = reader.u8();
 					let target = read_block(&mut blocks, reader);
-					wl!("Set triangle damage trigger] trigger index: {trigger_index}, id: {id}, target: {target}");
+					wl!(
+						"Set triangle damage trigger] trigger index: {trigger_index}, id: {id}, target: {target}"
+					);
 				}
 				0x64 => {
 					let name = reader.pascal_str();
@@ -1152,7 +1160,9 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 						if point_index == 0xFF {
 							wl!("Create bubble] chance: {value1}%, pos: {pos:?}");
 						} else {
-							wl!("Create bubble] chance: {value1}%, pos: somePoints[{point_index:?}]");
+							wl!(
+								"Create bubble] chance: {value1}%, pos: somePoints[{point_index:?}]"
+							);
 						}
 					} else {
 						wl!("Setup new chunk] change: {}%", value1 - 150);
@@ -1179,7 +1189,9 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 					let add_position = reader.u8() == 0;
 					let position = reader.vec3();
 					let min_u = reader.f32();
-					wl!("Create slimes] count: {count}, velocity: {velocity:?}, radius: {radius}, position: {position:?}, center at entity: {add_position}, u: {min_u}");
+					wl!(
+						"Create slimes] count: {count}, velocity: {velocity:?}, radius: {radius}, position: {position:?}, center at entity: {add_position}, u: {min_u}"
+					);
 				}
 				0x89 => {
 					let tri_id = reader.u8();
@@ -1191,7 +1203,9 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 					let vec1 = reader.vec3();
 					let vec2 = reader.vec3();
 					let vec3 = reader.vec3();
-					wl!("Shatter triangle 2] tri id: {tri_id}, vec: {vec1:?}, hitPoint1: {vec2:?}, hitPoint2: {vec3:?}");
+					wl!(
+						"Shatter triangle 2] tri id: {tri_id}, vec: {vec1:?}, hitPoint1: {vec2:?}, hitPoint2: {vec3:?}"
+					);
 				}
 				0x8B => {
 					let tri_id = reader.u8();
@@ -1229,7 +1243,9 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 					let value1 = reader.u8();
 					let value2 = reader.u8();
 					let speed = reader.f32();
-					wl!("Create fan] name: {name}, bbox: {min:?}-{max:?}, value1: {value1}, value2: {value2}, speed: {speed}");
+					wl!(
+						"Create fan] name: {name}, bbox: {min:?}-{max:?}, value1: {value1}, value2: {value2}, speed: {speed}"
+					);
 				}
 				0x91 => {
 					let name = reader.pascal_str();
@@ -1243,7 +1259,9 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 					let speed = reader.f32();
 					let size = reader.vec3();
 					let scale = reader.vec2();
-					wl!("Activate conveyor] id: {id}, name: {name}, speed: {speed}, size: {size:?}, scale: {scale:?}");
+					wl!(
+						"Activate conveyor] id: {id}, name: {name}, speed: {speed}, size: {size:?}, scale: {scale:?}"
+					);
 				}
 				0x93 => {
 					let name = reader.pascal_str();
@@ -1263,7 +1281,9 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 					let object_name = reader.pascal_str();
 					let arena_name = reader.pascal_str();
 					let init_target = read_ext_block(reader, offsets, object_name, "Spawn Door");
-					wl!("Spawn Door] pos: {position:?}, angle: {angle}, id: {id}, name: {object_name}, arena: {arena_name}, init target: {init_target}");
+					wl!(
+						"Spawn Door] pos: {position:?}, angle: {angle}, id: {id}, name: {object_name}, arena: {arena_name}, init target: {init_target}"
+					);
 				}
 				0x96 => {
 					let open_anim_offset = reader.u32();
@@ -1290,7 +1310,9 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 					let close_sound = reader.pascal_str();
 					let open_finish_sound = reader.pascal_str();
 					let close_finish_sound = reader.pascal_str();
-					wl!("Set door sounds] open: \"{open_sound}\", close: \"{close_sound}\", open finish: \"{open_finish_sound}\", close finish: \"{close_finish_sound}\"");
+					wl!(
+						"Set door sounds] open: \"{open_sound}\", close: \"{close_sound}\", open finish: \"{open_finish_sound}\", close finish: \"{close_finish_sound}\""
+					);
 				}
 				0x98 => {
 					let flags = reader.u32();
@@ -1316,13 +1338,17 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 					let index = reader.u8();
 					let name = reader.pascal_str();
 					let init_target = read_ext_block(reader, offsets, name, "Spawn (9C)");
-					wl!("Spawn alien] name: {name}, position: somePoints[{index}], init target: {init_target}");
+					wl!(
+						"Spawn alien] name: {name}, position: somePoints[{index}], init target: {init_target}"
+					);
 				}
 				0x9D => {
 					let name = reader.pascal_str();
 					let arena_index = reader.u32();
 					let speed = reader.f32();
-					wl!("Move to data thing] name: {name}, arena index: {arena_index}, speed: {speed}");
+					wl!(
+						"Move to data thing] name: {name}, arena index: {arena_index}, speed: {speed}"
+					);
 				}
 				0x9E => {
 					let value1 = reader.u8();
@@ -1330,13 +1356,20 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 					let value3 = reader.u8();
 					let has_target = value3 & 2 != 0;
 					let [v4, v5, v6]: [u8; 3] = reader.get();
-					let value3 = (value3 as usize) | ((v4 as usize) << 8) | ((v5 as usize) << 0x10) | ((v6 as usize) << 0x18);
+					let value3 = (value3 as usize)
+						| ((v4 as usize) << 8)
+						| ((v5 as usize) << 0x10)
+						| ((v6 as usize) << 0x18);
 					if has_target {
 						let target = reader.u32();
 						let target = push_block(&mut blocks, target);
-						wl!("Check touch damage] value1: {value1}, damage: {damage}, value3: {value3}, target: {target}");
+						wl!(
+							"Check touch damage] value1: {value1}, damage: {damage}, value3: {value3}, target: {target}"
+						);
 					} else {
-						wl!("Check touch damage] value1: {value1}, damage: {damage}, value3: {value3}");
+						wl!(
+							"Check touch damage] value1: {value1}, damage: {damage}, value3: {value3}"
+						);
 					}
 				}
 				0x9F => {
@@ -1352,7 +1385,9 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 					let pos2 = reader.vec3();
 					let name = reader.pascal_str();
 					let init_target = read_ext_block(reader, offsets, name, "Spawn Blit");
-					wl!("Spawn blit alien] name: {name}, position type: {value1}, pos1: {pos1:?}, pos2: {pos2:?}, init target: {init_target}");
+					wl!(
+						"Spawn blit alien] name: {name}, position type: {value1}, pos1: {pos1:?}, pos2: {pos2:?}, init target: {init_target}"
+					);
 				}
 				0xA0 => {
 					let comp = compare(reader);
@@ -1363,7 +1398,9 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 					let position = reader.vec3();
 					let object_name = reader.pascal_str();
 					let init_target = read_ext_block(reader, offsets, object_name, "Spawn Powerup");
-					wl!("Spawn Powerup] name: {object_name}, pos: {position:?}, init target: {init_target}");
+					wl!(
+						"Spawn Powerup] name: {object_name}, pos: {position:?}, init target: {init_target}"
+					);
 				}
 				0xA2 => {
 					let thing_index = (reader.u8() - 1) % 16;
@@ -1374,7 +1411,9 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 					let thing_index = (reader.u8() - 1) % 16;
 					let comp = compare(reader);
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Branch arena thing index comparison] thing index: {thing_index}, if {comp} {branch}");
+					wl!(
+						"Branch arena thing index comparison] thing index: {thing_index}, if {comp} {branch}"
+					);
 				}
 				0xA4 => {
 					let code = reader.u8();
@@ -1441,13 +1480,17 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 					let pickup_index = reader.u8();
 					let comp = compare(reader);
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Some pickup comparison branch 1?] pickup index: {pickup_index}, if {comp} {branch}");
+					wl!(
+						"Some pickup comparison branch 1?] pickup index: {pickup_index}, if {comp} {branch}"
+					);
 				}
 				0xAF => {
 					let pickup_type = reader.u8();
 					let comp = compare(reader);
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Some pickup comparison branch 2?] pickup type: {pickup_type}, {comp}, {branch}");
+					wl!(
+						"Some pickup comparison branch 2?] pickup type: {pickup_type}, {comp}, {branch}"
+					);
 				}
 				0xB0 => {
 					let branch = branch_code(&mut blocks, reader);
@@ -1469,7 +1512,9 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 					let value2 = reader.f32();
 					let value3 = reader.f32();
 					let value4 = reader.u8();
-					wl!("Explosion] pos: {pos:?}, radius: {radius}, value1: {value1}, value2: {value2}, value3: {value3}, value4: {value4}");
+					wl!(
+						"Explosion] pos: {pos:?}, radius: {radius}, value1: {value1}, value2: {value2}, value3: {value3}, value4: {value4}"
+					);
 				}
 				0xB3 => {
 					let name = reader.pascal_str();
@@ -1492,11 +1537,15 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 						let value1 = reader.f32();
 						let value2 = reader.f32();
 						let value3 = reader.i32();
-						wl!("Set some arena stuff based on arena var] var index: {var_index}, value1: {value1}, value2: {value2}, value3: {value3}");
+						wl!(
+							"Set some arena stuff based on arena var] var index: {var_index}, value1: {value1}, value2: {value2}, value3: {value3}"
+						);
 					} else if kind == 0 {
 						let thing_index = (reader.u8() - 1) % 16;
 						let value3 = reader.u32();
-						wl!("Set some arena stuff based on arena thing index] thing index: {thing_index}, value: {value3}");
+						wl!(
+							"Set some arena stuff based on arena thing index] thing index: {thing_index}, value: {value3}"
+						);
 					} else {
 						wl!("Set some arena stuff (unknown)] kind: {kind}");
 					}
@@ -1524,7 +1573,9 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 				}
 				0xB8 => {
 					let [value1, radius, size] = reader.vec3().into();
-					wl!("Destroy alien (and damage area)] value1?: {value1}, radius?: {radius}, size? : {size}");
+					wl!(
+						"Destroy alien (and damage area)] value1?: {value1}, radius?: {radius}, size? : {size}"
+					);
 				}
 				0xB9 => {
 					let comp = compare(reader);
@@ -1539,7 +1590,9 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 				0xBB => {
 					let horizontal_speed = reader.f32();
 					let vertical_speed = reader.f32();
-					wl!("Add random velocity] horizontal: {horizontal_speed}, vertical: {vertical_speed}");
+					wl!(
+						"Add random velocity] horizontal: {horizontal_speed}, vertical: {vertical_speed}"
+					);
 				}
 				0xBC => {
 					let comp = compare(reader);
@@ -1575,9 +1628,13 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 					let index = index & !0x80;
 					if index < 3 {
 						let index = (b'x' + index) as char;
-						wl!("Branch on axis distance to player] index: {index} (abs: {abs}), if {comp} {branch}");
+						wl!(
+							"Branch on axis distance to player] index: {index} (abs: {abs}), if {comp} {branch}"
+						);
 					} else {
-						wl!("Branch on axis distance to player] index: {index} (abs: {abs}), if {comp} {branch}");
+						wl!(
+							"Branch on axis distance to player] index: {index} (abs: {abs}), if {comp} {branch}"
+						);
 					}
 				}
 				0xC0 => {
@@ -1623,7 +1680,9 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 					let value1 = reader.u8();
 					let value2 = reader.u32();
 					let value3 = reader.u32();
-					wl!("Set someData] name: {name}, value1: {value1}, value2: {value2}, value3: {value3}");
+					wl!(
+						"Set someData] name: {name}, value1: {value1}, value2: {value2}, value3: {value3}"
+					);
 				}
 				0xC7 => {
 					let data = var_or_data(reader);
@@ -1633,7 +1692,9 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 					let speed = reader.f32();
 					let target = reader.vec3();
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Set someAnimVector, branch if done] speed: {speed}, target: {target:?}, {branch}");
+					wl!(
+						"Set someAnimVector, branch if done] speed: {speed}, target: {target:?}, {branch}"
+					);
 				}
 				0xC9 => {
 					let scale = reader.f32();
@@ -1666,7 +1727,9 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 					let length = reader.f32();
 					let name = reader.pascal_str();
 					let target = read_ext_block(reader, offsets, name, "Spawn on path");
-					wl!("Spawn aliens on path] name: {name}, spacing: {length}, init target: {target}, path offset: {path_offset:06X}");
+					wl!(
+						"Spawn aliens on path] name: {name}, spacing: {length}, init target: {target}, path offset: {path_offset:06X}"
+					);
 				}
 				0xCF => {
 					let speed = reader.f32();
@@ -1787,7 +1850,9 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 					let arena_index = reader.i32();
 					let object_name = reader.pascal_str();
 					let init_target = read_ext_block(reader, offsets, object_name, "Spawn");
-					wl!("Spawn Entity 2] name: {object_name}, pos: {position:?}, angle: {angle}, arena_index: {arena_index}, init target: {init_target}");
+					wl!(
+						"Spawn Entity 2] name: {object_name}, pos: {position:?}, angle: {angle}, arena_index: {arena_index}, init target: {init_target}"
+					);
 				}
 				0xE7 => {
 					let branch = branch_code(&mut blocks, reader);
@@ -1862,7 +1927,9 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 					let index = reader.u8();
 					let distance = reader.i16();
 					let branch = branch_code(&mut blocks, reader);
-					wl!("Branch on visible] point index: {index}, distance: {distance}, target: {branch}");
+					wl!(
+						"Branch on visible] point index: {index}, distance: {distance}, target: {branch}"
+					);
 				}
 				0xF4 => {
 					let add = reader.u8() != 0;
@@ -1896,7 +1963,9 @@ fn parse_cmi<'a>(reader: &mut Reader<'a>) -> CmiScript<'a> {
 					let msg_type = reader.u8();
 					let message = reader.pascal_str();
 					let duration = reader.f32();
-					wl!("Display Message] type: {msg_type}, message: {message}, duration: {duration}");
+					wl!(
+						"Display Message] type: {msg_type}, message: {message}, duration: {duration}"
+					);
 				}
 				0xF8 => {
 					let value1 = reader.u8();

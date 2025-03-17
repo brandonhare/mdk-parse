@@ -1,3 +1,4 @@
+/// Exports the assets from STREAM, which is the end-of-level space tube section.
 use crate::data_formats::{Texture, TextureHolder, TextureResult, image_formats::ColourMap};
 use crate::file_formats::{
 	Bni,
@@ -185,7 +186,4 @@ pub fn parse_stream(save_sounds: bool, save_textures: bool, save_meshes: bool) {
 
 		other_output.write("Pens", "txt", &pens);
 	}
-
-	//bni.save(&mut output);
-	//mti.save(&mut output.push_dir("textures"), Some(palette));
 }

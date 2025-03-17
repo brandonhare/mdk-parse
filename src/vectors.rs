@@ -1,3 +1,5 @@
+/// Simple Vector3 type for 3d models and such.
+/// MDK uses a weird coordinate system so I swizzle most vectors into something more sensible during parsing.
 use std::fmt::Write;
 use std::ops::{Add, AddAssign, Deref, DerefMut, Mul, MulAssign, Sub, SubAssign};
 

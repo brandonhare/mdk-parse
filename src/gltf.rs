@@ -1,3 +1,4 @@
+/// An implementation of the [GLTF](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html) 3D model file format.
 use serde::{Serialize, Serializer};
 use std::mem;
 
@@ -597,7 +598,7 @@ impl Gltf {
 		PrimitiveIndex(mesh, primitive_index)
 	}
 	pub fn set_primitive_mode(&mut self, primitive: PrimitiveIndex, mode: PrimitiveMode) {
-		self.meshes[primitive.0 .0].primitives[primitive.1].mode = Some(mode);
+		self.meshes[primitive.0.0].primitives[primitive.1].mode = Some(mode);
 	}
 
 	pub fn add_primitive_uvs(&mut self, primitive: PrimitiveIndex, uvs: &[Vec2]) {
@@ -605,7 +606,7 @@ impl Gltf {
 			return;
 		}
 		let uvs = self.add_primitive_data(uvs, PrimitiveTarget::Vertices);
-		self.meshes[primitive.0 .0].primitives[primitive.1]
+		self.meshes[primitive.0.0].primitives[primitive.1]
 			.attributes
 			.texcoord_0 = Some(uvs);
 	}
@@ -614,7 +615,7 @@ impl Gltf {
 			return;
 		}
 		let colours = self.add_primitive_data(colours, PrimitiveTarget::Vertices);
-		self.meshes[primitive.0 .0].primitives[primitive.1]
+		self.meshes[primitive.0.0].primitives[primitive.1]
 			.attributes
 			.color_0 = Some(colours);
 	}
@@ -777,7 +778,7 @@ fn to_uri(data: &[u8]) -> String {
 	to_uri_mime(data, "application/octet-stream")
 }
 fn to_uri_mime(data: &[u8], mime: &str) -> String {
-	use base64::{engine::general_purpose, Engine};
+	use base64::{Engine, engine::general_purpose};
 	let mut result = format!("data:{mime};base64,");
 	general_purpose::STANDARD.encode_string(data, &mut result);
 	result

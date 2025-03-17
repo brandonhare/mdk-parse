@@ -277,7 +277,10 @@ impl Dti<'_> {
 	pub fn save(&self, output: &mut OutputWriter) {
 		output.write_palette("palette", self.pal);
 		self.skybox.save_as("skybox", output, Some(self.pal));
+		self.save_info_as("info", output);
+	}
 
+	pub fn save_info_as(&self, info_filename: &str, output: &mut OutputWriter) {
 		use std::fmt::Write;
 		let mut info = format!(
 			"name: {}\n\nplayer start arena: {}, pos: {}, angle: {}\ntranslucent colours: {:?}\npalette free rows: {}\n\n{:#?}\n\narenas ({}):\n",
@@ -325,6 +328,6 @@ impl Dti<'_> {
 			info.push('\n');
 		}
 
-		output.write("info", "txt", info.as_bytes());
+		output.write(info_filename, "txt", info.as_bytes());
 	}
 }

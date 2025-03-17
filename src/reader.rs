@@ -3,17 +3,16 @@ use std::io::Read;
 
 use crate::vectors::Vec3;
 
-#[cfg(not(target_endian = "little"))]
-compile_error!("big endian not supported!");
-
-#[cfg(feature = "readranges")]
-thread_local! {
-	pub static READ_RANGE : std::rc::Rc<std::cell::RefCell<ranges::Ranges<usize>>> = Default::default();
-}
-
+/// Helper struct to parse values out of a byte stream.
 #[derive(Clone)]
 pub struct Reader<'buf> {
 	reader: io::Cursor<&'buf [u8]>,
+}
+
+// This readranges stuff was used during development to highlight sections of the file I may have missed.  Now everything's been pretty much entirely parsed, this should all be removed.
+#[cfg(feature = "readranges")]
+thread_local! {
+	pub static READ_RANGE : std::rc::Rc<std::cell::RefCell<ranges::Ranges<usize>>> = Default::default();
 }
 
 #[allow(dead_code)]
@@ -61,6 +60,8 @@ impl<'buf> Reader<'buf> {
 		result
 	}
 
+	/// Returns a copy of the reader with the current position set to the new pos.
+	/// The origin and size of the target slice are unchanged.
 	#[must_use]
 	pub fn clone_at(&self, new_pos: usize) -> Self {
 		let mut result = self.clone();
@@ -68,10 +69,12 @@ impl<'buf> Reader<'buf> {
 		result
 	}
 
+	/// Truncates the target slice
 	pub fn set_end(&mut self, length: usize) {
 		self.resize_pos(0..length, self.position());
 	}
 
+	/// Changes the current position to be the new origin, so new positions are relative to this.
 	pub fn rebase(&mut self) {
 		self.resize(self.position()..);
 	}
@@ -209,6 +212,7 @@ impl<'buf> Reader<'buf> {
 		self.slice(self.remaining_len())
 	}
 
+	/// Reads a length-prefixed string
 	pub fn pascal_str(&mut self) -> &'buf str {
 		self.try_pascal_str().expect("invalid string")
 	}
@@ -217,6 +221,7 @@ impl<'buf> Reader<'buf> {
 		self.try_str(length as usize)
 	}
 
+	/// Reads a string from a fixed-size span of bytes
 	pub fn str(&mut self, size: usize) -> &'buf str {
 		self.try_str(size).expect("invalid string")
 	}

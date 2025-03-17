@@ -45,8 +45,8 @@ impl<'a> Bsp<'a> {
 			let zeroes = data.get::<[u32; 4]>();
 			assert_eq!(zeroes, [0; 4]);
 
-			assert!((-1..=num_planes as i16).contains(&result.plane_index_behind));
-			assert!((-1..=num_planes as i16).contains(&result.plane_index_front));
+			assert!((-1..num_planes as i16).contains(&result.plane_index_behind));
+			assert!((-1..num_planes as i16).contains(&result.plane_index_front));
 
 			assert!((result.normal.iter().map(|f| f * f).sum::<f32>() - 1.0).abs() <= 0.0001);
 			planes.push(result);

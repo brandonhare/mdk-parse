@@ -11,7 +11,12 @@ calculate exact sky and shiny offsets
 find unknown mesh material -1028
 other mesh material types
 fall3d animation fps
-fall3d colours (zoom, flare)
 fall3d dedup shared assets
 misc
 make texture holder return full frames and path by ref
+check bsp translucency tree ordering
+create gamemode_formats folder
+split parse and export code somewhere else
+fix font export
+export 3d animations
+remove readranges

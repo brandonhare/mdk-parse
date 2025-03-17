@@ -4,6 +4,7 @@ use std::{
 	path::{Path, PathBuf},
 };
 
+/// Helper struct to wrangle filenames, folder structures, and PNG stuff
 #[derive(Clone)]
 pub struct OutputWriter {
 	path: PathBuf,

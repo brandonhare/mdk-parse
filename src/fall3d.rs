@@ -1,11 +1,11 @@
-use std::fmt::Write;
-
+/// Exports the assets from FALL3D, which is the skydiving section at the start of each level.
 use crate::Reader;
 use crate::data_formats::image_formats::ColourMap;
 use crate::data_formats::{Texture, TextureHolder, TextureResult};
 use crate::file_formats::mti::Material;
 use crate::file_formats::{Bni, Mti, Sni};
 use crate::output_writer::OutputWriter;
+use std::fmt::Write;
 
 // combine flare and zoom images into an animation
 fn combine_animation_frames(bni: &mut Bni) {
@@ -49,26 +49,29 @@ fn combine_animation_frames(bni: &mut Bni) {
 		);
 	}
 
-	// todo: figure out the palettes for these animations
-
 	bni.animations_2d.push(("FLARE", flare));
 	bni.animations_2d.push(("ZOOM", zoom));
 }
 
-const ZOOM_ENTRIES: usize = 17;
-static ZOOM_TRANSPARENCIES: [u8; ZOOM_ENTRIES] = [
-	/*0, 0, 0, 0, 0, 0, 0,*/
-	0, 0x3, 0x6, 0xC, 0x12, 0x18, 0x30, 0x48, 0x60, 0x78, 0x90, 0xA8, 0xC0, 0xD7, 0xE6, 0xF5, 0xFF,
-];
-static ZOOM_PAL: [u8; ZOOM_ENTRIES * 4] = const {
-	let mut result = [255; ZOOM_ENTRIES * 4];
+/// FLARE and ZOOM animations are not normal images, but transparent overlays.
+/// This is a special colour palette just for them.
+/// It might not be 100% accurate (especially since transparency in the engine is just picking other colours from the existing palette), but it's probably close enough.
+static ZOOM_PAL: [u8; NUM_ZOOM_PAL_ENTRIES * 4] = const {
+	// these values are hard-coded into the engine.
+	static ZOOM_TRANSPARENCIES: [u8; NUM_ZOOM_PAL_ENTRIES] = [
+		0, 0x3, 0x6, 0xC, 0x12, 0x18, 0x30, 0x48, 0x60, 0x78, 0x90, 0xA8, 0xC0, 0xD7, 0xE6, 0xF5,
+		0xFF,
+	];
+
+	let mut result = [255; NUM_ZOOM_PAL_ENTRIES * 4];
 	let mut i = 0;
-	while i < ZOOM_ENTRIES {
-		result[ZOOM_ENTRIES * 3 + i] = ZOOM_TRANSPARENCIES[i];
+	while i < NUM_ZOOM_PAL_ENTRIES {
+		result[NUM_ZOOM_PAL_ENTRIES * 3 + i] = ZOOM_TRANSPARENCIES[i];
 		i += 1;
 	}
 	result
 };
+const NUM_ZOOM_PAL_ENTRIES: usize = 17;
 
 pub fn parse_fall3d(save_sounds: bool, save_textures: bool, save_meshes: bool) {
 	let output = OutputWriter::new("assets/FALL3D", true);
@@ -103,6 +106,7 @@ pub fn parse_fall3d(save_sounds: bool, save_textures: bool, save_meshes: bool) {
 
 		for (name, frames) in &bni.animations_2d {
 			let pal = if *name == "ZOOM" || *name == "FLARE" {
+				// todo check if flare palette is different
 				&ZOOM_PAL
 			} else {
 				spacepal

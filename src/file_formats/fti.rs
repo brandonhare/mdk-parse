@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use crate::data_formats::{parse_animation, Texture, Wav};
+use crate::data_formats::{Texture, Wav, parse_animation};
 use crate::{OutputWriter, Reader};
 
 pub struct FontLetter<Pixels: AsRef<[u8]>> {

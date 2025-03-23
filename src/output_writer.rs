@@ -10,12 +10,9 @@ pub struct OutputWriter {
 	path: PathBuf,
 }
 impl OutputWriter {
-	pub fn get_output_path(path: impl AsRef<Path>) -> PathBuf {
-		Path::new("output").join(path.as_ref().strip_prefix("assets").unwrap())
-	}
-
 	pub fn new(path: impl AsRef<Path>, create_output_dir: bool) -> Self {
-		let mut output_path = OutputWriter::get_output_path(path);
+		let mut output_path =
+			Path::new("output").join(path.as_ref().strip_prefix("assets").unwrap());
 		if create_output_dir {
 			fs::create_dir_all(&output_path).unwrap();
 		}
@@ -32,7 +29,7 @@ impl OutputWriter {
 		result
 	}
 
-	fn set_output_path(&mut self, asset_name: &str, ext: &str) -> &Path {
+	pub fn set_output_path(&mut self, asset_name: &str, ext: &str) -> &Path {
 		let ext = ext.trim_start_matches('.');
 		self.path.set_file_name(asset_name);
 		self.path.set_extension(ext);

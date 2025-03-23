@@ -214,10 +214,11 @@ pub fn try_parse_crossfade_image<'a>(
 	Some(([lut1, lut2], Texture::new(width, height, pixels)))
 }
 
+#[derive(Default)]
 pub struct ColourMap([u64; 4]);
 impl ColourMap {
 	pub fn new() -> Self {
-		Self([0; 4])
+		Default::default()
 	}
 	pub fn from_tex(tex: &Texture) -> Self {
 		Self::from_pixels(&tex.pixels)

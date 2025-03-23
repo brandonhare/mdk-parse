@@ -170,15 +170,19 @@ impl<'a> Bni<'a> {
 		}
 	}
 
-	pub fn save(&self, output: &mut OutputWriter) {
+	pub fn save(&self, output: &mut OutputWriter, flatten: bool) {
 		fn save_items<T>(
-			folder_name: &str, output: &mut OutputWriter, items: &[(&str, T)],
+			folder_name: &str, output: &mut OutputWriter, flatten: bool, items: &[(&str, T)],
 			mut save_func: impl FnMut(&str, &T, &mut OutputWriter),
 		) {
 			if items.is_empty() {
 				return;
 			}
-			let mut output = output.push_dir(folder_name);
+			let output = if flatten {
+				output
+			} else {
+				&mut output.push_dir(folder_name)
+			};
 
 			let mut prev_name = "";
 			let mut name_run = 0;
@@ -201,30 +205,36 @@ impl<'a> Bni<'a> {
 				};
 				prev_name = name;
 
-				save_func(save_name, item, &mut output);
+				save_func(save_name, item, output);
 			}
 		}
 
-		let palette = self
+		let palette: Option<&[u8]> = self
 			.palettes
 			.first()
 			.map(|(_, pal)| *pal)
 			.filter(|_| self.palettes.len() == 1);
 
-		save_items("sounds", output, &self.sounds, |name, sound, output| {
-			sound.save_as(name, output)
-		});
+		save_items(
+			"Sounds",
+			output,
+			flatten,
+			&self.sounds,
+			|name, sound, output| sound.save_as(name, output),
+		);
 
 		save_items(
-			"textures",
+			"Textures",
 			output,
+			flatten,
 			&self.textures,
 			|name, texture, output| texture.save_as(name, output, palette),
 		);
 
 		save_items(
-			"textures",
+			"Textures",
 			output,
+			flatten,
 			&self.coloured_textures,
 			|name, (pal, texture), output| texture.save_as(name, output, Some(pal)),
 		);
@@ -232,6 +242,7 @@ impl<'a> Bni<'a> {
 		save_items(
 			"2d animations",
 			output,
+			flatten,
 			&self.animations_2d,
 			|name, frames, output| {
 				let fps = if name == "PICKUPS" { 2 } else { 30 }; // todo fps
@@ -242,25 +253,44 @@ impl<'a> Bni<'a> {
 		save_items(
 			"3d animations",
 			output,
+			flatten,
 			&self.animations_3d,
 			|name, anim, output| anim.save_as(name, output),
 		);
 
-		save_items("meshes", output, &self.meshes, |name, mesh, output| {
-			mesh.save_as(name, output)
-		});
+		save_items(
+			"Meshes",
+			output,
+			flatten,
+			&self.meshes,
+			|name, mesh, output| mesh.save_as(name, output),
+		);
 
-		save_items("palettes", output, &self.palettes, |name, pal, output| {
-			output.write_palette(name, pal)
-		});
+		save_items(
+			"Palettes",
+			output,
+			flatten,
+			&self.palettes,
+			|name, pal, output| output.write_palette(name, pal),
+		);
 
-		save_items("strings", output, &self.strings, |name, strings, output| {
-			output.write(name, "txt", strings.join("\n"));
-		});
+		save_items(
+			"Strings",
+			output,
+			flatten,
+			&self.strings,
+			|name, strings, output| {
+				output.write(name, "txt", strings.join("\n"));
+			},
+		);
 
-		save_items("unknown", output, &self.unknowns, |name, item, output| {
-			output.write(name, "data", item)
-		});
+		save_items(
+			"Unknown",
+			output,
+			flatten,
+			&self.unknowns,
+			|name, item, output| output.write(name, "data", item),
+		);
 	}
 }
 

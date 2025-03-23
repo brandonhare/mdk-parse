@@ -64,7 +64,7 @@ impl MeshGeo {
 		let mut tri_map: HashMap<(u8, u16), u16> = HashMap::new();
 
 		self.tris.retain(|tri| {
-			let id = tri.flags >> TRIFLAG_ID_SHIFT;
+			let id = (tri.flags & TRIFLAG_ID_MASK) >> TRIFLAG_ID_SHIFT;
 			if id == 0 {
 				return true;
 			}
@@ -164,7 +164,7 @@ const TRIFLAG_OUTLINE_MASK_LINES: u32 = 0x70_00_00;
 const TRIFLAG_DRAW_OUTLINE: u32 = 0x80_00_00;
 const TRIFLAG_OUTLINE_MASK: u32 = 0xF0_00_00;
 const TRIFLAG_ID_MASK: u32 = 0xFF_00_00_00;
-const TRIFLAG_ID_SHIFT: usize = 24;
+const TRIFLAG_ID_SHIFT: u32 = 24;
 
 #[derive(Clone, PartialEq)]
 pub struct MeshTri {

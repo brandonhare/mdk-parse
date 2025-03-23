@@ -66,7 +66,6 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "png",
- "ranges",
  "serde",
  "serde_json",
 ]
@@ -117,12 +116,6 @@ checksum = "1885c039570dc00dcb4ff087a89e185fd56bae234ddc7f056a945bf36467248d"
 dependencies = [
  "proc-macro2",
 ]
-
-[[package]]
-name = "ranges"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "350932f7e8b2d0333d2537f42671a837473576c00e128fbee84c819ea08783b5"
 
 [[package]]
 name = "ryu"

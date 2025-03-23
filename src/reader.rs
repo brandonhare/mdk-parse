@@ -9,28 +9,12 @@ pub struct Reader<'buf> {
 	reader: io::Cursor<&'buf [u8]>,
 }
 
-// This readranges stuff was used during development to highlight sections of the file I may have missed.  Now everything's been pretty much entirely parsed, this should all be removed.
-#[cfg(feature = "readranges")]
-thread_local! {
-	pub static READ_RANGE : std::rc::Rc<std::cell::RefCell<ranges::Ranges<usize>>> = Default::default();
-}
-
 #[allow(dead_code)]
 impl<'buf> Reader<'buf> {
 	pub fn new(buf: &'buf [u8]) -> Reader<'buf> {
 		Reader {
 			reader: io::Cursor::new(buf),
 		}
-	}
-
-	fn mark_read(&self, range: std::ops::Range<usize>) {
-		#[cfg(feature = "readranges")]
-		{
-			let origin = self.buf().as_ptr() as usize;
-			let range = range.start + origin..range.end + origin;
-			READ_RANGE.with(|ranges| ranges.borrow_mut().insert(range));
-		}
-		let _ = range;
 	}
 
 	pub fn resize(&mut self, range: impl std::ops::RangeBounds<usize>) {
@@ -121,10 +105,8 @@ impl<'buf> Reader<'buf> {
 	}
 	pub fn try_get_unvalidated<T: Readable>(&mut self) -> Option<T> {
 		let mut buffer = T::new_buffer();
-		let pos = self.position();
 		let buffer_bytes = T::buffer_as_mut(&mut buffer);
 		self.reader.read_exact(buffer_bytes).ok()?;
-		self.mark_read(pos..pos + buffer_bytes.len());
 		let result = if cfg!(target_endian = "little") {
 			T::convert_little(buffer)
 		} else {
@@ -191,7 +173,6 @@ impl<'buf> Reader<'buf> {
 			return None;
 		}
 
-		self.mark_read(pos..next_position);
 		self.set_position(next_position);
 		Some(())
 	}
@@ -205,7 +186,6 @@ impl<'buf> Reader<'buf> {
 	pub fn try_slice(&mut self, size: usize) -> Option<&'buf [u8]> {
 		let pos = self.position();
 		self.try_skip(size)?;
-		self.mark_read(pos..pos + size);
 		Some(&self.buf()[pos..pos + size])
 	}
 	pub fn remaining_slice(&mut self) -> &'buf [u8] {

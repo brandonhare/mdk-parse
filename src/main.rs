@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 #![warn(trivial_casts, trivial_numeric_casts, future_incompatible)]
-use std::path::Path;
 
 mod data_formats;
 mod fall3d;
@@ -11,79 +10,16 @@ mod reader;
 mod stream;
 mod traverse;
 mod vectors;
+
 use data_formats::image_formats;
 use file_formats::{Bni, Cmi, Dti, Fti, Mti, Mto, Sni};
 use output_writer::OutputWriter;
 use reader::Reader;
+use std::path::Path;
 use vectors::{Vec2, Vec3};
 
-struct DataFile<'a>(&'a Path, Vec<u8>);
-impl std::ops::Deref for DataFile<'_> {
-	type Target = [u8];
-	fn deref(&self) -> &Self::Target {
-		&self.1
-	}
-}
-#[cfg(feature = "readranges")]
-impl Drop for DataFile<'_> {
-	fn drop(&mut self) {
-		let buf_range = self.1.as_ptr_range();
-		let buf_range = buf_range.start as usize..buf_range.end as usize;
-		let read_range = reader::READ_RANGE
-			.with(|read_range| read_range.borrow().clone())
-			.invert()
-			.intersect(buf_range.clone());
-
-		if read_range.is_empty() {
-			return;
-		}
-
-		let map_bound = |span: &ranges::GenericRange<usize>| -> (usize, usize) {
-			use std::ops::Bound as B;
-			use std::ops::RangeBounds;
-			(
-				match span.start_bound() {
-					B::Included(start) => start - buf_range.start,
-					B::Excluded(start) => start - buf_range.start + 1,
-					B::Unbounded => 0,
-				},
-				match span.end_bound() {
-					B::Included(end) => end - buf_range.start + 1,
-					B::Excluded(end) => end - buf_range.start,
-					B::Unbounded => buf_range.len(),
-				},
-			)
-		};
-
-		let mut first = true;
-		for span in read_range.as_slice() {
-			let (start, end) = map_bound(span);
-			let len = end - start;
-			if len <= 3 && self.1[start..end].iter().all(|&b| b == 0) {
-				// padding
-				continue;
-			}
-			if first {
-				println!("{} ({:06X}..{:06X})", self.0.display(), 0, self.1.len());
-				first = false;
-			}
-			println!("  {start:06X}-{end:06X} ({len:7})");
-		}
-		if !first {
-			println!();
-		}
-	}
-}
-fn read_file(path: &Path) -> DataFile {
-	let data = std::fs::read(path).unwrap();
-
-	#[cfg(feature = "readranges")]
-	{
-		let origin = data.as_ptr() as usize;
-		reader::READ_RANGE.with(|range| range.borrow_mut().remove(origin..origin + data.len()));
-	}
-
-	DataFile(path, data)
+fn read_file(path: &Path) -> Vec<u8> {
+	std::fs::read(path).unwrap()
 }
 
 fn for_all_ext(path: impl AsRef<Path>, ext: &str, func: impl Fn(&Path) + Copy) {
@@ -187,9 +123,6 @@ fn parse_video(path: &Path) {
 }
 
 fn main() {
-	#[cfg(feature = "readranges")]
-	eprintln!("Read ranges enabled");
-
 	let start_time = std::time::Instant::now();
 
 	let save_sounds = true;

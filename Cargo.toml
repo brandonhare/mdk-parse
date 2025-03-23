@@ -2,19 +2,22 @@
 name = "mdk-parse"
 version = "0.1.0"
 edition = "2024"
+authors = ["brandonhare"]
+description = "Parses and exports game assets from MDK (1997)"
+repository = "https://github.com/brandonhare/mdk-parse"
+license = "MIT"
+keywords = ["asset", "3d", "loading"]
+categories = ["encoding", "game-development", "multimedia", "rendering::data-formats"]
+exclude = ["/assets", "/output"]
+publish = false
 
 [features]
-readranges = ["dep:ranges"]
 default = []
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[profile.release]
-incremental = true
+readranges = ["dep:ranges"]
 
 [dependencies]
-base64 = "0.22.0"
-png = "0.17.7"
+base64 = "0.22.1"
+png = "0.17.16"
 ranges = { version = "0.4.0", optional = true }
-serde = { version = "1.0.183", features = ["derive"] }
-serde_json = "1.0.104"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"

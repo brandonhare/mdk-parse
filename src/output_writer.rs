@@ -10,6 +10,9 @@ pub struct OutputWriter {
 	path: PathBuf,
 }
 impl OutputWriter {
+	/// Creates an output writer that points to the corresponding path in the Output folder
+	///
+	/// e.g. `assets/MISC` becomes `output/MISC`
 	pub fn new(path: impl AsRef<Path>, create_output_dir: bool) -> Self {
 		let mut output_path =
 			Path::new("output").join(path.as_ref().strip_prefix("assets").unwrap());

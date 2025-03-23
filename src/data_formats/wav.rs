@@ -2,15 +2,12 @@ use crate::{OutputWriter, Reader};
 
 pub struct Wav<'a> {
 	pub file_data: &'a [u8],
+	pub flags: u32, // flags from SNI and MTO
+
 	pub num_channels: u16,
 	pub samples_per_second: u32,
 	pub bits_per_sample: u16,
 	pub duration_secs: f32,
-}
-
-pub struct SoundInfo<'a> {
-	pub wav: Wav<'a>,
-	pub flags: u32, // todo
 }
 
 impl<'a> Wav<'a> {
@@ -64,6 +61,7 @@ impl<'a> Wav<'a> {
 
 		Some(Wav {
 			file_data,
+			flags: 0,
 			num_channels,
 			samples_per_second,
 			bits_per_sample,
@@ -78,27 +76,22 @@ impl<'a> Wav<'a> {
 	pub fn save_as(&self, name: &str, output: &mut OutputWriter) {
 		output.write(name, "wav", self.file_data)
 	}
-}
 
-impl SoundInfo<'_> {
-	pub fn save_as(&self, name: &str, output: &mut OutputWriter) {
-		self.wav.save_as(name, output)
-	}
 	pub fn create_report_tsv(sounds: &[(&str, Self)]) -> String {
 		use std::fmt::Write;
 		let mut summary = String::from(
 			"name\tchannels\tsample rate\tbit depth\tduration (s)\tflags 1\tflags 2\n",
 		);
-		for (name, sound) in sounds {
+		for (name, wav) in sounds {
 			writeln!(
 				summary,
 				"{name}\t{}\t{}\t{}\t{}\t{:X}\t{:X}",
-				sound.wav.num_channels,
-				sound.wav.samples_per_second,
-				sound.wav.bits_per_sample,
-				sound.wav.duration_secs,
-				sound.flags & 0xFFFF,
-				(sound.flags >> 16) & 0xFFFF,
+				wav.num_channels,
+				wav.samples_per_second,
+				wav.bits_per_sample,
+				wav.duration_secs,
+				wav.flags & 0xFFFF,
+				(wav.flags >> 16) & 0xFFFF,
 			)
 			.unwrap();
 		}

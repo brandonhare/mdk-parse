@@ -1,4 +1,4 @@
-use crate::data_formats::{Animation, Bsp, Mesh, SoundInfo, Wav};
+use crate::data_formats::{Animation, Bsp, Mesh, Wav};
 use crate::file_formats::Mti;
 use crate::{OutputWriter, Reader};
 
@@ -11,7 +11,7 @@ pub struct MtoArena<'a> {
 	pub name: &'a str,
 	pub animations: Vec<(&'a str, Animation<'a>)>,
 	pub meshes: Vec<(&'a str, Mesh<'a>)>,
-	pub sounds: Vec<(&'a str, SoundInfo<'a>)>,
+	pub sounds: Vec<(&'a str, Wav<'a>)>,
 	pub bsp: Bsp<'a>,
 	pub palette: &'a [u8],
 	pub mti: Mti<'a>,
@@ -83,14 +83,9 @@ impl<'a> Mto<'a> {
 					let sound_length = subfile_reader.u32() as usize;
 					let mut sound_reader =
 						subfile_reader.resized(sound_offset..sound_offset + sound_length);
-					let wav = Wav::parse(&mut sound_reader);
-					sounds.push((
-						name,
-						SoundInfo {
-							wav,
-							flags: sound_flags,
-						},
-					));
+					let mut wav = Wav::parse(&mut sound_reader);
+					wav.flags = sound_flags;
+					sounds.push((name, wav));
 				}
 			}
 
@@ -146,7 +141,7 @@ impl<'a> Mto<'a> {
 				for (name, sound_info) in &arena.sounds {
 					sound_info.save_as(name, &mut output);
 				}
-				let sound_summary = SoundInfo::create_report_tsv(&arena.sounds);
+				let sound_summary = Wav::create_report_tsv(&arena.sounds);
 				output.write("sounds", "tsv", &sound_summary);
 			}
 

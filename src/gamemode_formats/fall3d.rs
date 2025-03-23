@@ -119,6 +119,7 @@ pub fn parse_fall3d(save_sounds: bool, save_textures: bool, save_meshes: bool) {
 		}
 	}
 
+	// todo move most of this to shared
 	let mut temp_filename = String::new();
 	for level_index in 1..=5 {
 		temp_filename.clear();
@@ -215,6 +216,13 @@ pub fn parse_fall3d(save_sounds: bool, save_textures: bool, save_meshes: bool) {
 			let mut output = output.push_dir("Meshes");
 			for (name, mesh) in &bni.meshes {
 				mesh.save_textured_as(name, &mut output, &mut textures);
+			}
+
+			if !bni.animations_3d.is_empty() {
+				let mut output = output.push_dir("Animations");
+				for (name, anim) in &bni.animations_3d {
+					anim.save_as(name, &mut output);
+				}
 			}
 		}
 

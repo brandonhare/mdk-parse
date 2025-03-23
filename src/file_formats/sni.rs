@@ -1,9 +1,9 @@
-use crate::data_formats::{Bsp, SoundInfo, Texture, Wav, parse_animation};
+use crate::data_formats::{Bsp, Texture, Wav, image_formats::parse_animation};
 use crate::{OutputWriter, Reader};
 
 pub struct Sni<'a> {
 	pub filename: &'a str,
-	pub sounds: Vec<(&'a str, SoundInfo<'a>)>,
+	pub sounds: Vec<(&'a str, Wav<'a>)>,
 	pub bsps: Vec<(&'a str, Bsp<'a>)>,
 	pub anims: Vec<(&'a str, Vec<Texture<'a>>)>,
 }
@@ -44,14 +44,9 @@ impl<'a> Sni<'a> {
 				let bsp = Bsp::parse(&mut entry_reader);
 				bsps.push((entry_name, bsp));
 			} else {
-				let wav = Wav::parse(&mut entry_reader);
-				sounds.push((
-					entry_name,
-					SoundInfo {
-						wav,
-						flags: entry_type,
-					},
-				));
+				let mut wav = Wav::parse(&mut entry_reader);
+				wav.flags = entry_type;
+				sounds.push((entry_name, wav));
 			}
 		}
 
@@ -72,7 +67,7 @@ impl<'a> Sni<'a> {
 		for (name, sound) in &self.sounds {
 			sound.save_as(name, output);
 		}
-		let sound_summary = SoundInfo::create_report_tsv(&self.sounds);
+		let sound_summary = Wav::create_report_tsv(&self.sounds);
 		output.write("sounds", "tsv", &sound_summary);
 
 		if !self.bsps.is_empty() {

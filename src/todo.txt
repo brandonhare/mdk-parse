@@ -2,7 +2,6 @@ dti arena num
 mesh reference points purpose
 textures a, b, flags?
 sni sound type values
-all 3d animations output
 traverse other output? splines? scripts? reports?
 traverse unused meshes/textures?
 hide backface outlines
@@ -12,8 +11,9 @@ find unknown mesh material -1028
 other mesh material types
 fall3d animation fps
 fall3d dedup shared assets
+fall3d move non-mesh textures out of mesh folder
 make texture holder return full frames and path by ref
 check bsp translucency tree ordering
 split parse and export code somewhere else
 fix font export
-export 3d animations
+export 3d animations inside meshes

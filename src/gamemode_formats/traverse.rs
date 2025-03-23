@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::fmt::Write;
 
 use crate::data_formats::{
-	Mesh, SoundInfo, Texture, TextureHolder, TextureResult, image_formats::ColourMap,
+	Mesh, Pen, Texture, TextureHolder, TextureResult, Wav, image_formats::ColourMap,
 };
 use crate::file_formats::{
 	Bni, Cmi, Dti, Fti, Mto, Sni,
-	mti::{Material, Mti, Pen},
+	mti::{Material, Mti},
 };
 use crate::{output_writer::OutputWriter, reader::Reader};
 
@@ -103,7 +103,7 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 
 		// gather assets
 
-		let mut all_sounds = HashMap::<&str, &SoundInfo>::new();
+		let mut all_sounds = HashMap::<&str, &Wav>::new();
 		let mut all_meshes = HashMap::<&str, &Mesh>::new();
 		let mut all_pens = HashMap::<&str, Pen>::new();
 		let mut all_textures = HashMap::<&str, &[Texture]>::new();
@@ -278,6 +278,7 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 		// save meshes/textures
 		{
 			let mut output = output.push_dir("Meshes");
+			let mut anim_output = output.push_dir("Animations");
 			// gather materials
 			for (&name, mesh) in all_meshes.iter() {
 				let mesh_arenas = cmi
@@ -478,12 +479,27 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 					}
 				}
 			}
+
+			// todo save animations inside meshes
+			// save mto animations
+			for arena in &mto.arenas {
+				for (name, anim) in &arena.animations {
+					anim.save_as(name, &mut anim_output);
+				}
+			}
+			// save cmi animations
+			for (mesh_name, mesh) in cmi.entities.iter() {
+				for anim_offset in &mesh.animations {
+					let anim = &cmi.animations[anim_offset];
+					anim.save_as(&format!("{mesh_name}_{anim_offset:08X}"), &mut anim_output);
+				}
+			}
 		}
 
 		// save unused/other textures
 		if save_textures {
 			let mut temp_arenas: Vec<(&str, &str)> = Vec::new();
-			let mut tex_output = output.push_dir("Other Textures");
+			let mut tex_output = output.push_dir("Textures");
 			let mut anim_output = output.push_dir("Animations");
 
 			dti.skybox.save_as("Sky", &mut tex_output, Some(dti.pal));
@@ -651,6 +667,15 @@ pub fn parse_traverse(save_sounds: bool, save_textures: bool, save_meshes: bool)
 					);
 				}
 			}
+		}
+	}
+
+	if save_meshes {
+		// save animations
+		// todo move into individual level meshes
+		let mut anim_output = shared_output.push_dir("Meshes/Animations");
+		for (name, anim) in &trav_bni.animations_3d {
+			anim.save_as(name, &mut anim_output);
 		}
 	}
 }

@@ -1,8 +1,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use crate::data_formats::{Texture, image_formats::ColourMap};
-use crate::file_formats::mti::Pen;
+use crate::data_formats::{Pen, Texture, image_formats::ColourMap};
 use crate::gltf::AlphaMode;
 use crate::{OutputWriter, Reader, Vec2, Vec3, gltf};
 

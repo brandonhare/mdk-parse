@@ -1,11 +1,10 @@
-/// Simple Vector3 type for 3d models and such.
-/// MDK uses a weird coordinate system so I swizzle most vectors into something more sensible during parsing.
 use std::fmt::Write;
 use std::ops::{Add, AddAssign, Deref, DerefMut, Mul, MulAssign, Sub, SubAssign};
 
 pub type Vec2 = [f32; 2];
 pub type Vec4 = [f32; 4];
 
+/// Simple Vector3 type for 3d models and such.
 #[derive(Default, Copy, Clone, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct Vec3 {

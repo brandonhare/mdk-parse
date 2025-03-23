@@ -214,6 +214,70 @@ pub fn try_parse_crossfade_image<'a>(
 	Some(([lut1, lut2], Texture::new(width, height, pixels)))
 }
 
+pub fn parse_overlay_animation<'a>(reader: &mut Reader<'a>, num_frames: usize) -> Vec<Texture<'a>> {
+	let width = reader.u16();
+	let height = reader.u16();
+	let base_pixels = reader.slice(width as usize * height as usize);
+
+	let mut frames: Vec<Texture> = Vec::with_capacity(num_frames + 1);
+	frames.push(Texture::new(width, height, base_pixels));
+
+	let _runtime_anim_time = reader.u32();
+
+	let mut data = reader.rebased(); // offsets relative to here
+	let offsets = data.get_vec::<u32>(num_frames * 2); // run of meta offsets then run of pixels offsets
+	for (&metadata_offset, &pixel_offset) in
+		offsets[..num_frames].iter().zip(&offsets[num_frames..])
+	{
+		let mut meta = data.clone_at(metadata_offset as usize);
+		let mut src_pixels = data.clone_at(pixel_offset as usize);
+
+		let mut dest_pixels = frames.last().unwrap().pixels.clone().into_owned();
+
+		let mut dest_pixel_offset = meta.u16() as usize * 4;
+		let num_chunks = meta.u16();
+
+		for _ in 0..num_chunks {
+			let chunk_size = meta.u8() as usize * 4;
+			let output_offset = meta.u8() as usize * 4;
+			dest_pixels[dest_pixel_offset..dest_pixel_offset + chunk_size]
+				.clone_from_slice(src_pixels.slice(chunk_size));
+			dest_pixel_offset += chunk_size + output_offset;
+		}
+
+		frames.push(Texture::new(width, height, dest_pixels));
+	}
+
+	if frames.first() == frames.last() {
+		frames.pop();
+	} else {
+		eprintln!("texture doesn't loop properly!");
+	}
+
+	frames
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
+pub enum Pen {
+	Texture(u8),     // index into mesh material array
+	Colour(u8),      // index into palette
+	Translucent(u8), // index into dti translucent_colours
+	Shiny(u8),       // todo
+	Unknown(i32),    // todo
+}
+impl Pen {
+	pub fn new(index: i32) -> Pen {
+		match index {
+			0..=255 => Pen::Texture(index as u8),
+			-255..=-1 => Pen::Colour(-index as u8),
+			-1010..=-990 => Pen::Shiny((-990 - index) as u8),
+			-1027..=-1024 => Pen::Translucent((-1024 - index) as u8),
+			..=-1028 => Pen::Unknown(index), // todo
+			_ => Pen::Unknown(index),        // todo
+		}
+	}
+}
+
 #[derive(Default)]
 pub struct ColourMap([u64; 4]);
 impl ColourMap {

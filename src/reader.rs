@@ -3,7 +3,8 @@ use std::io::Read;
 
 use crate::vectors::Vec3;
 
-/// Helper struct to parse values out of a byte stream.
+/// Helper struct to parse values out of a byte stream.  
+/// Assumes everything is little endian.
 #[derive(Clone)]
 pub struct Reader<'buf> {
 	reader: io::Cursor<&'buf [u8]>,
@@ -107,11 +108,7 @@ impl<'buf> Reader<'buf> {
 		let mut buffer = T::new_buffer();
 		let buffer_bytes = T::buffer_as_mut(&mut buffer);
 		self.reader.read_exact(buffer_bytes).ok()?;
-		let result = if cfg!(target_endian = "little") {
-			T::convert_little(buffer)
-		} else {
-			T::convert_big(buffer)
-		};
+		let result = T::convert_little(buffer);
 		Some(result)
 	}
 	pub fn get<T: Readable + std::fmt::Debug>(&mut self) -> T {

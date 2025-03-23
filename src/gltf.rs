@@ -1,5 +1,5 @@
+//! An implementation of the [GLTF](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html) 3D model file format.
 #![allow(dead_code)]
-/// An implementation of the [GLTF](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html) 3D model file format.
 use serde::{Serialize, Serializer};
 use std::mem;
 

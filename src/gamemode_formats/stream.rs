@@ -1,8 +1,8 @@
 /// Exports the assets from STREAM, which is the end-of-level space tube section.
-use crate::data_formats::{Texture, TextureHolder, TextureResult, image_formats::ColourMap};
+use crate::data_formats::{Pen, Texture, TextureHolder, TextureResult, image_formats::ColourMap};
 use crate::file_formats::{
 	Bni,
-	mti::{Material, Mti, Pen},
+	mti::{Material, Mti},
 };
 use crate::{OutputWriter, Reader};
 use std::fmt::Write;
@@ -158,7 +158,7 @@ pub fn parse_stream(save_sounds: bool, save_textures: bool, save_meshes: bool) {
 		output.write_palette("Palette", palette);
 
 		let mut meshes_output = output.push_dir("Meshes/Textures");
-		let mut other_output = output.push_dir("Other Textures");
+		let mut other_output = output.push_dir("Textures");
 		let mut pens = String::from("Name    \tValue\n");
 
 		for (name, mat) in &mti.materials {

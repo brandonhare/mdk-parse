@@ -10,33 +10,6 @@ pub struct Bni<'a> {
 	pub meshes: Vec<(&'a str, Mesh<'a>)>,
 	pub palettes: Vec<(&'a str, &'a [u8])>,
 	pub strings: Vec<(&'a str, Vec<&'a str>)>,
-
-	pub unknowns: Vec<(&'a str, &'a [u8])>,
-}
-
-impl std::fmt::Debug for Bni<'_> {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		struct Named<'a, T>(&'a [(&'a str, T)]);
-		impl<T> std::fmt::Debug for Named<'_, T> {
-			fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-				f.debug_list()
-					.entries(self.0.iter().map(|(name, _)| *name))
-					.finish()
-			}
-		}
-
-		f.debug_struct("Bni")
-			.field("sounds", &Named(&self.sounds))
-			.field("textures", &Named(&self.textures))
-			.field("coloured_textures", &Named(&self.coloured_textures))
-			.field("animations_2d", &Named(&self.animations_2d))
-			.field("animations_3d", &Named(&self.animations_3d))
-			.field("meshes", &Named(&self.meshes))
-			.field("palettes", &Named(&self.palettes))
-			.field("strings", &Named(&self.strings))
-			.field("unknowns", &Named(&self.unknowns))
-			.finish()
-	}
 }
 
 impl<'a> Bni<'a> {
@@ -57,7 +30,6 @@ impl<'a> Bni<'a> {
 		let mut meshes = Vec::new();
 		let mut palettes = Vec::new();
 		let mut strings = Vec::new();
-		let mut unknowns = Vec::new();
 
 		let num_entries = file_reader.u32();
 		for entry_index in 0..num_entries {
@@ -74,7 +46,8 @@ impl<'a> Bni<'a> {
 			// guess asset types
 
 			// wav
-			if let Some(wav) = Wav::try_parse(&mut reader.clone()) {
+			if reader.clone().try_slice(4) == Some(b"RIFF") {
+				let wav = Wav::parse(&mut reader.clone());
 				sounds.push((name, wav));
 				continue;
 			}
@@ -153,8 +126,7 @@ impl<'a> Bni<'a> {
 				continue;
 			}
 
-			eprintln!("unknown asset {name}");
-			unknowns.push((name, reader.clone().remaining_slice()));
+			eprintln!("unknown asset {name} ({} bytes)", reader.remaining_len());
 		}
 
 		Bni {
@@ -166,7 +138,6 @@ impl<'a> Bni<'a> {
 			meshes,
 			palettes,
 			strings,
-			unknowns,
 		}
 	}
 
@@ -282,14 +253,6 @@ impl<'a> Bni<'a> {
 			|name, strings, output| {
 				output.write(name, "txt", strings.join("\n"));
 			},
-		);
-
-		save_items(
-			"Unknown",
-			output,
-			flatten,
-			&self.unknowns,
-			|name, item, output| output.write(name, "data", item),
 		);
 	}
 }

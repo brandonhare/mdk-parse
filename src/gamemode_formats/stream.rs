@@ -16,7 +16,6 @@ pub fn parse_stream(save_sounds: bool, save_textures: bool, save_meshes: bool) {
 	assert!(bni.animations_2d.is_empty());
 	assert!(bni.coloured_textures.is_empty());
 	assert!(bni.strings.is_empty());
-	assert!(bni.unknowns.is_empty());
 	assert_eq!(bni.palettes.len(), 1);
 
 	let palette = bni.palettes[0].1;

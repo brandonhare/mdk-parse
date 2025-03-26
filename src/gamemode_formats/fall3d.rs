@@ -105,14 +105,12 @@ pub fn parse_fall3d(save_sounds: bool, save_textures: bool, save_meshes: bool) {
 		tex_output.write_palette("SPACEPAL", spacepal);
 
 		for (name, frames) in &bni.animations_2d {
-			let pal = if *name == "ZOOM" || *name == "FLARE" {
+			if *name == "ZOOM" || *name == "FLARE" {
 				// todo check if flare palette is different
-				&ZOOM_PAL
+				Texture::save_animated_rgba(frames, name, 24, &mut anim_output, &ZOOM_PAL);
 			} else {
-				spacepal
+				Texture::save_animated(frames, name, 24, &mut anim_output, Some(spacepal));
 			};
-
-			Texture::save_animated(frames, name, 24, &mut anim_output, Some(pal));
 		}
 		for (name, tex) in &bni.textures {
 			tex.save_as(name, &mut tex_output, Some(spacepal));

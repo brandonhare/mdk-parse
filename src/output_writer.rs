@@ -57,6 +57,20 @@ impl OutputWriter {
 			width,
 			height,
 			palette,
+			false,
+		)
+	}
+	pub fn write_png_rgba(
+		&mut self, asset_name: &str, width: u32, height: u32, pixels: impl AsRef<[u8]>,
+		palette: &[u8],
+	) {
+		save_png(
+			self.set_output_path(asset_name, "png"),
+			pixels.as_ref(),
+			width,
+			height,
+			Some(palette),
+			true,
 		)
 	}
 
@@ -69,8 +83,31 @@ impl OutputWriter {
 		&mut self, asset_name: &str, width: u32, height: u32, fps: u16, num_frames: u32,
 		palette: Option<&[u8]>,
 	) -> png::Writer<impl std::io::Write> {
+		self.start_animated_png_inner(asset_name, width, height, fps, num_frames, palette, false)
+	}
+	#[must_use]
+	pub fn start_animated_png_rgba(
+		&mut self, asset_name: &str, width: u32, height: u32, fps: u16, num_frames: u32,
+		palette: &[u8],
+	) -> png::Writer<impl std::io::Write> {
+		self.start_animated_png_inner(
+			asset_name,
+			width,
+			height,
+			fps,
+			num_frames,
+			Some(palette),
+			true,
+		)
+	}
+
+	#[allow(clippy::too_many_arguments)]
+	pub fn start_animated_png_inner(
+		&mut self, asset_name: &str, width: u32, height: u32, fps: u16, num_frames: u32,
+		palette: Option<&[u8]>, palette_rgba: bool,
+	) -> png::Writer<impl std::io::Write> {
 		let path = self.set_output_path(asset_name, "png");
-		let mut encoder = setup_png(path, width, height, palette);
+		let mut encoder = setup_png(path, width, height, palette, palette_rgba);
 		if num_frames > 1 {
 			encoder.set_animated(num_frames, 0).unwrap();
 			encoder.set_sep_def_img(false).unwrap();
@@ -80,8 +117,10 @@ impl OutputWriter {
 	}
 }
 
-fn save_png(path: &Path, data: &[u8], width: u32, height: u32, palette: Option<&[u8]>) {
-	let mut encoder = setup_png(path, width, height, palette)
+fn save_png(
+	path: &Path, data: &[u8], width: u32, height: u32, palette: Option<&[u8]>, palette_rgba: bool,
+) {
+	let mut encoder = setup_png(path, width, height, palette, palette_rgba)
 		.write_header()
 		.unwrap();
 	encoder.write_image_data(data).unwrap();
@@ -103,7 +142,7 @@ fn save_pal(path: &Path, data: &[u8]) {
 }
 
 fn setup_png<'a>(
-	path: &Path, width: u32, height: u32, palette: Option<&'a [u8]>,
+	path: &Path, width: u32, height: u32, palette: Option<&'a [u8]>, palette_rgba: bool,
 ) -> png::Encoder<'a, impl std::io::Write> {
 	let mut encoder = png::Encoder::new(
 		BufWriter::new(fs::File::create(path).unwrap()),
@@ -112,12 +151,13 @@ fn setup_png<'a>(
 	);
 	if let Some(palette) = palette {
 		encoder.set_color(png::ColorType::Indexed);
-		if palette.len() == 768 {
-			// 256 byte rgb palette
-			encoder.set_palette(std::borrow::Cow::Borrowed(palette));
+		if !palette_rgba {
+			// rgb palette
+			assert_eq!(palette.len() % 3, 0);
+			encoder.set_palette(palette);
 			encoder.set_trns([0].as_slice());
 		} else {
-			// todo hack: rgba palette, sorted as rgbrgbrgb...aaaaaa
+			// rgba palette, sorted as rgbrgbrgb...aaaaaa
 			assert_eq!(palette.len() % 4, 0);
 			let num_entries = palette.len() / 4;
 			let (rgb, a) = palette.split_at(num_entries * 3);

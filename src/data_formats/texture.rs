@@ -51,6 +51,18 @@ impl<'a> Texture<'a> {
 	pub fn save_animated(
 		frames: &[Self], name: &str, fps: u16, output: &mut OutputWriter, palette: Option<&[u8]>,
 	) {
+		Self::save_animated_inner(frames, name, fps, output, palette, false);
+	}
+	pub fn save_animated_rgba(
+		frames: &[Self], name: &str, fps: u16, output: &mut OutputWriter, palette: &[u8],
+	) {
+		Self::save_animated_inner(frames, name, fps, output, Some(palette), true);
+	}
+
+	fn save_animated_inner(
+		frames: &[Self], name: &str, fps: u16, output: &mut OutputWriter, palette: Option<&[u8]>,
+		palette_rgba: bool,
+	) {
 		let num_frames = frames.len();
 		assert_ne!(num_frames, 0, "no frames in animation!");
 
@@ -79,13 +91,14 @@ impl<'a> Texture<'a> {
 		let width = (max_x + offset_x) as usize;
 		let height = (max_y + offset_y) as usize;
 
-		let mut encoder = output.start_animated_png(
+		let mut encoder = output.start_animated_png_inner(
 			name,
 			width as u32,
 			height as u32,
 			fps,
 			num_frames as u32,
 			palette,
+			palette_rgba,
 		);
 
 		if simple {

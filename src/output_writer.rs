@@ -120,6 +120,27 @@ impl OutputWriter {
 fn save_png(
 	path: &Path, data: &[u8], width: u32, height: u32, palette: Option<&[u8]>, palette_rgba: bool,
 ) {
+	debug_assert_eq!(
+		width as usize * height as usize,
+		data.len(),
+		"mismatched image dimensions"
+	);
+
+	let palette = match palette {
+		Some(pal) if !palette_rgba => {
+			// truncate unused colours for no reason
+			let max_index = data.iter().copied().max().unwrap() as usize;
+			let trimmed_pal = pal.get(..(max_index + 1) * 3);
+			debug_assert!(
+				trimmed_pal.is_some(),
+				"indexed pixel out of range in {}",
+				path.display()
+			);
+			trimmed_pal
+		}
+		_ => palette,
+	};
+
 	let mut encoder = setup_png(path, width, height, palette, palette_rgba)
 		.write_header()
 		.unwrap();
@@ -157,7 +178,7 @@ fn setup_png<'a>(
 			encoder.set_palette(palette);
 			encoder.set_trns([0].as_slice());
 		} else {
-			// rgba palette, sorted as rgbrgbrgb...aaaaaa
+			// rgba palette, sorted as rgbrgbrgb...aaa
 			assert_eq!(palette.len() % 4, 0);
 			let num_entries = palette.len() / 4;
 			let (rgb, a) = palette.split_at(num_entries * 3);

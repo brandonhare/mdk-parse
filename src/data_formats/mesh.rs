@@ -1,10 +1,12 @@
+//! Code for parsing 3D meshes as well as exporting them to GLTF.
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use crate::data_formats::{Pen, Texture, image_formats::ColourMap};
+use crate::data_formats::{Pen, Texture};
 use crate::gltf::AlphaMode;
 use crate::{OutputWriter, Reader, Vec2, Vec3, gltf};
 
+/// 3D mesh
 #[derive(PartialEq)]
 pub struct Mesh<'a> {
 	pub materials: Vec<&'a str>,
@@ -12,6 +14,7 @@ pub struct Mesh<'a> {
 	pub reference_points: Vec<Vec3>,
 }
 
+/// Either a single mesh or a collection of submeshes
 #[derive(PartialEq)]
 pub enum MeshType<'a> {
 	Single(MeshGeo),
@@ -22,10 +25,26 @@ pub enum MeshType<'a> {
 }
 
 #[derive(Default, PartialEq)]
+pub struct Submesh<'a> {
+	pub mesh_data: MeshGeo,
+	pub name: Cow<'a, str>,
+	pub origin: Vec3,
+}
+
+/// Contains raw mesh data
+#[derive(Default, PartialEq)]
 pub struct MeshGeo {
 	pub verts: Vec<Vec3>,
 	pub tris: Vec<MeshTri>,
 	pub bbox: [Vec3; 2],
+}
+
+#[derive(Clone, PartialEq)]
+pub struct MeshTri {
+	pub indices: [u16; 3],
+	pub material: Pen,
+	pub uvs: [Vec2; 3],
+	pub flags: u32, // bsp id and flags, 0 for normal meshes
 }
 
 impl MeshGeo {
@@ -58,6 +77,7 @@ impl MeshGeo {
 		}
 	}
 
+	/// Splits the mesh from per-triangle IDs into separate submeshes
 	pub fn split_by_id(mut self) -> MeshType<'static> {
 		let mut submeshes: Vec<Submesh> = Vec::new();
 		let mut tri_map: HashMap<(u8, u16), u16> = HashMap::new();
@@ -148,13 +168,6 @@ impl MeshGeo {
 	}
 }
 
-#[derive(Default, PartialEq)]
-pub struct Submesh<'a> {
-	pub mesh_data: MeshGeo,
-	pub name: Cow<'a, str>,
-	pub origin: Vec3,
-}
-
 const TRIFLAG_HIDDEN: u32 = 0x12;
 const TRIFLAG_OUTLINE_12: u32 = 0x10_00_00;
 const TRIFLAG_OUTLINE_23: u32 = 0x20_00_00;
@@ -165,13 +178,6 @@ const TRIFLAG_OUTLINE_MASK: u32 = 0xF0_00_00;
 const TRIFLAG_ID_MASK: u32 = 0xFF_00_00_00;
 const TRIFLAG_ID_SHIFT: u32 = 24;
 
-#[derive(Clone, PartialEq)]
-pub struct MeshTri {
-	pub indices: [u16; 3],
-	pub material: Pen,
-	pub uvs: [Vec2; 3],
-	pub flags: u32, // bsp id and flags, 0 for normal meshes
-}
 impl MeshTri {
 	pub fn try_parse_slice(reader: &mut Reader, count: usize) -> Option<Vec<Self>> {
 		if count > 10000 {
@@ -718,6 +724,66 @@ impl<'a> Mesh<'a> {
 	}
 }
 
+/// Helper struct contaning a bitset of used colour indices.
+/// Used to help deduplicate textures used by different palettes.
+#[derive(Default)]
+pub struct ColourMap([u64; 4]);
+impl ColourMap {
+	pub fn new() -> Self {
+		Default::default()
+	}
+	pub fn from_tex(tex: &Texture) -> Self {
+		Self::from_pixels(&tex.pixels)
+	}
+	pub fn from_frames(frames: &[Texture]) -> Self {
+		let mut result = Self::new();
+		for frame in frames {
+			result.extend(frame.pixels.iter());
+		}
+		result
+	}
+	pub fn from_pixels(pixels: &[u8]) -> Self {
+		let mut result = Self::new();
+		result.extend(pixels);
+		result
+	}
+	pub fn push(&mut self, index: u8) {
+		self.0[(index >> 6) as usize] |= 1 << (index & 63);
+	}
+
+	pub fn compare(&self, pal1: &[u8], pal2: &[u8]) -> bool {
+		debug_assert_eq!(pal1.len(), 256 * 3);
+		debug_assert_eq!(pal2.len(), 256 * 3);
+
+		for (&mask, (block1, block2)) in self
+			.0
+			.iter()
+			.zip(pal1.chunks_exact(64 * 3).zip(pal2.chunks_exact(64 * 3)))
+		{
+			for i in 0..64 {
+				if mask & (1 << i) != 0 && block1[i * 3..(i + 1) * 3] != block2[i * 3..(i + 1) * 3]
+				{
+					return false;
+				}
+			}
+		}
+		true
+	}
+}
+impl Extend<u8> for ColourMap {
+	fn extend<Iter: IntoIterator<Item = u8>>(&mut self, iter: Iter) {
+		for p in iter {
+			self.push(p);
+		}
+	}
+}
+impl<'a> Extend<&'a u8> for ColourMap {
+	fn extend<Iter: IntoIterator<Item = &'a u8>>(&mut self, iter: Iter) {
+		self.extend(iter.into_iter().copied());
+	}
+}
+
+/// Terrible helper trait to pass material and palette information into mesh exporting and texture gathering code.
 pub trait TextureHolder<'a> {
 	fn lookup(&mut self, name: &str) -> TextureResult<'a>;
 	fn get_used_colours(&self, name: &str, colours: &mut ColourMap);
@@ -725,6 +791,7 @@ pub trait TextureHolder<'a> {
 	fn get_translucent_colours(&self) -> [[u8; 4]; 4];
 }
 
+/// Result of a mesh material lookup
 pub enum TextureResult<'a> {
 	None,
 	Pen(Pen),

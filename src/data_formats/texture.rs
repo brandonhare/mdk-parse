@@ -2,6 +2,7 @@ use std::borrow::Cow;
 
 use crate::OutputWriter;
 
+/// 2D Textures
 #[derive(Default, Clone, PartialEq, Eq)]
 pub struct Texture<'a> {
 	pub width: u16,
@@ -23,13 +24,6 @@ impl<'a> Texture<'a> {
 			height,
 			pixels,
 			position: (0, 0),
-		}
-	}
-
-	pub fn clone_ref(&self) -> Texture {
-		Texture {
-			pixels: self.pixels.as_ref().into(),
-			..*self
 		}
 	}
 
@@ -59,6 +53,8 @@ impl<'a> Texture<'a> {
 		Self::save_animated_inner(frames, name, fps, output, Some(palette), true);
 	}
 
+	/// Takes a sequence of animation frames with possible position offsets
+	/// and arranges them into an animated png.
 	fn save_animated_inner(
 		frames: &[Self], name: &str, fps: u16, output: &mut OutputWriter, palette: Option<&[u8]>,
 		palette_rgba: bool,

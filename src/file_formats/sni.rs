@@ -1,6 +1,8 @@
 use crate::data_formats::{Bsp, Texture, Wav, image_formats::parse_animation};
 use crate::{OutputWriter, Reader};
 
+/// SNI files primarily contain sounds, but they also contain BSP data for the inter-arena corridors
+/// as well as some 2d player animations
 pub struct Sni<'a> {
 	pub filename: &'a str,
 	pub sounds: Vec<(&'a str, Wav<'a>)>,
@@ -12,7 +14,7 @@ impl<'a> Sni<'a> {
 	pub fn parse(mut reader: Reader<'a>) -> Sni<'a> {
 		let filesize = reader.u32() + 4;
 		assert_eq!(reader.len(), filesize as usize, "filesize does not match");
-		reader.rebase();
+		reader.rebase(); // offsets from this point in the file
 
 		let filename = reader.str(12);
 		let filesize2 = reader.u32();

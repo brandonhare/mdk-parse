@@ -2,6 +2,7 @@ use crate::data_formats::{Animation, Bsp, Mesh, Wav};
 use crate::file_formats::Mti;
 use crate::{OutputWriter, Reader};
 
+/// MTO files contain per-arena assets
 pub struct Mto<'a> {
 	pub filename: &'a str,
 	pub arenas: Vec<MtoArena<'a>>,
@@ -37,7 +38,7 @@ impl<'a> Mto<'a> {
 			let asset_filesize = arena_reader.u32() as usize;
 			arena_reader.rebase_length(asset_filesize);
 
-			let subfile_offset = arena_reader.u32() as usize;
+			let assets_offset = arena_reader.u32() as usize;
 			let pal_offset = arena_reader.u32() as usize;
 			let bsp_offset = arena_reader.u32() as usize;
 			let matfile_offset = arena_reader.position();
@@ -46,43 +47,43 @@ impl<'a> Mto<'a> {
 			let mut meshes;
 			let mut sounds;
 			{
-				// parse subfile
-				arena_reader.set_position(subfile_offset);
-				let subfile_length = arena_reader.u32() as usize;
-				let mut subfile_reader = arena_reader.rebased_length(subfile_length);
+				// parse assets
+				arena_reader.set_position(assets_offset);
+				let assets_length = arena_reader.u32() as usize;
+				let mut assets_reader = arena_reader.rebased_length(assets_length);
 
-				let num_animations = subfile_reader.u32() as usize;
-				let num_meshes = subfile_reader.u32() as usize;
-				let num_sounds = subfile_reader.u32() as usize;
+				let num_animations = assets_reader.u32() as usize;
+				let num_meshes = assets_reader.u32() as usize;
+				let num_sounds = assets_reader.u32() as usize;
 
 				animations = Vec::with_capacity(num_animations);
 				meshes = Vec::with_capacity(num_meshes);
 				sounds = Vec::with_capacity(num_sounds);
 
 				for _ in 0..num_animations {
-					let name = subfile_reader.str(8);
-					let offset = subfile_reader.u32() as usize;
+					let name = assets_reader.str(8);
+					let offset = assets_reader.u32() as usize;
 
-					let anim = Animation::parse(&mut subfile_reader.resized(offset..));
+					let anim = Animation::parse(&mut assets_reader.resized(offset..));
 					animations.push((name, anim));
 				}
 				for _ in 0..num_meshes {
-					let name = subfile_reader.str(8);
-					let offset = subfile_reader.u32() as usize;
+					let name = assets_reader.str(8);
+					let offset = assets_reader.u32() as usize;
 
-					let mut mesh_reader = subfile_reader.resized(offset..);
+					let mut mesh_reader = assets_reader.resized(offset..);
 					let is_multimesh = mesh_reader.u32();
 					assert!(is_multimesh <= 1, "invalid multimesh value");
 					let mesh = Mesh::parse(&mut mesh_reader, is_multimesh != 0);
 					meshes.push((name, mesh));
 				}
 				for _ in 0..num_sounds {
-					let name = subfile_reader.str(12);
-					let sound_flags = subfile_reader.u32(); // todo
-					let sound_offset = subfile_reader.u32() as usize;
-					let sound_length = subfile_reader.u32() as usize;
+					let name = assets_reader.str(12);
+					let sound_flags = assets_reader.u32(); // todo
+					let sound_offset = assets_reader.u32() as usize;
+					let sound_length = assets_reader.u32() as usize;
 					let mut sound_reader =
-						subfile_reader.resized(sound_offset..sound_offset + sound_length);
+						assets_reader.resized(sound_offset..sound_offset + sound_length);
 					let mut wav = Wav::parse(&mut sound_reader);
 					wav.flags = sound_flags;
 					sounds.push((name, wav));

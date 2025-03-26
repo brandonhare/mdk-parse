@@ -1,5 +1,6 @@
-/// Exports the assets from STREAM, which is the end-of-level space tube section.
-use crate::data_formats::{Pen, Texture, TextureHolder, TextureResult, image_formats::ColourMap};
+//! Exports the assets from STREAM (the end-of-level space tube section).
+use crate::data_formats::mesh::ColourMap;
+use crate::data_formats::{Pen, Texture, TextureHolder, TextureResult};
 use crate::file_formats::{
 	Bni,
 	mti::{Material, Mti},

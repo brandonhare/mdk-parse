@@ -1,5 +1,7 @@
 use crate::{OutputWriter, Reader, Vec3, gltf};
 
+/// 3D vertex animations
+#[derive(Clone, PartialEq)]
 pub struct Animation<'a> {
 	pub speed: f32,
 	pub target_vectors: Vec<Vec3>, // todo what exactly are these?
@@ -7,6 +9,7 @@ pub struct Animation<'a> {
 	pub parts: Vec<AnimationPart<'a>>,
 }
 
+#[derive(Clone, PartialEq)]
 pub struct AnimationPart<'a> {
 	pub name: &'a str,
 	pub point_paths: Vec<Vec<Vec3>>,

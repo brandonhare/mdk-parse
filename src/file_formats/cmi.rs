@@ -5,6 +5,10 @@ use crate::data_formats::cmi_bytecode::CmiCallOrigin;
 use crate::data_formats::{Animation, Mesh, Spline, cmi_bytecode};
 use crate::{OutputWriter, Reader};
 
+/// CMI files contain all the gameplay data in the form of their custom scripting bytecode
+/// as well as some custom assets.
+///
+/// See [cmi_bytecode]
 #[derive(Default)]
 pub struct Cmi<'a> {
 	pub filename: &'a str,

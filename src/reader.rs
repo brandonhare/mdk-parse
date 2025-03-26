@@ -3,8 +3,7 @@ use std::io::Read;
 
 use crate::vectors::Vec3;
 
-/// Helper struct to parse values out of a byte stream.  
-/// Assumes everything is little endian.
+/// Helper struct to parse values out of a byte stream.
 #[derive(Clone)]
 pub struct Reader<'buf> {
 	reader: io::Cursor<&'buf [u8]>,

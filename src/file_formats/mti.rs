@@ -1,5 +1,13 @@
+use crate::data_formats::image_formats::{parse_basic_image, parse_overlay_animation};
 use crate::data_formats::{Pen, Texture};
 use crate::{OutputWriter, Reader};
+
+/// MTI files just store materials, containing both texture data
+/// and giving names to Pens (flat colours or engine materials)
+pub struct Mti<'a> {
+	pub filename: &'a str,
+	pub materials: Vec<(&'a str, Material<'a>)>,
+}
 
 pub enum Material<'a> {
 	Pen(Pen),
@@ -7,27 +15,18 @@ pub enum Material<'a> {
 	AnimatedTexture(Vec<Texture<'a>>, MaterialFlags),
 }
 
+/// Some metadata per material, no idea what most of it means
 pub struct MaterialFlags {
-	// todo what are these
 	pub a: f32,
 	pub b: f32,
 	pub flags: u32,
 }
 
-pub struct Mti<'a> {
-	pub filename: &'a str,
-	pub materials: Vec<(&'a str, Material<'a>)>,
-}
-
 impl<'a> Mti<'a> {
 	pub fn parse(mut reader: Reader<'a>) -> Mti<'a> {
 		let filesize = reader.u32() as usize;
-		let mut reader = {
-			let mut new_reader = reader.rebased();
-			reader.skip(filesize);
-			new_reader.set_end(filesize);
-			new_reader
-		};
+		reader.rebase(); // set this position as the new origin of the file (for offsets)
+		reader.set_end(filesize);
 
 		let filename = reader.str(12);
 		let filesize2 = reader.u32() as usize;
@@ -60,10 +59,11 @@ impl<'a> Mti<'a> {
 			let b = reader.f32(); // todo what is this
 			let start_offset = reader.u32() as usize;
 
-			let mut entry_reader = reader.clone_at(start_offset);
-
-			let flags_mask = flags & 0x30000; // if the texture is animated or not
-			let flags_rest = flags & !0x30000; // todo what are these
+			const MAT_TYPE_IMAGE: u32 = 0;
+			const MAT_TYPE_AMIMATED: u32 = 1;
+			const MAT_TYPE_OVERLAY_IMAGE: u32 = 2;
+			let mat_type = (flags >> 16) & 3;
+			let flags_rest = flags & !0x30000;
 
 			let matflags = MaterialFlags {
 				a,
@@ -71,37 +71,28 @@ impl<'a> Mti<'a> {
 				flags: flags_rest,
 			};
 
-			assert_ne!(
-				flags_mask, 0x30000,
-				"unknown mti flags combination ({flags:X}) on {name}"
-			);
-
-			let num_frames = if flags_mask != 0 {
-				entry_reader.u32() as usize
-			} else {
-				1
+			let mut entry_reader = reader.clone_at(start_offset);
+			let result = match mat_type {
+				MAT_TYPE_IMAGE => Material::Texture(parse_basic_image(&mut entry_reader), matflags),
+				MAT_TYPE_AMIMATED => {
+					let num_frames = entry_reader.u32();
+					let width = entry_reader.u16();
+					let height = entry_reader.u16();
+					let frame_size = width as usize * height as usize;
+					let frames = (0..num_frames)
+						.map(|_| Texture::new(width, height, entry_reader.slice(frame_size)))
+						.collect();
+					Material::AnimatedTexture(frames, matflags)
+				}
+				MAT_TYPE_OVERLAY_IMAGE => {
+					// this is only used for the M_COMM terminal thing that calls the bomber aircraft
+					let frames = parse_overlay_animation(&mut entry_reader);
+					Material::AnimatedTexture(frames, matflags)
+				}
+				_ => panic!("unknown mti material type on {name}"),
 			};
-			let width = entry_reader.u16();
-			let height = entry_reader.u16();
-			let frame_size = width as usize * height as usize;
 
-			if num_frames == 1 {
-				let pixels = entry_reader.slice(frame_size);
-				materials.push((
-					name,
-					Material::Texture(Texture::new(width, height, pixels), matflags),
-				));
-			} else if flags_mask == 0x10000 {
-				// animated sequence
-				let frames = (0..num_frames)
-					.map(|_| Texture::new(width, height, entry_reader.slice(frame_size)))
-					.collect();
-				materials.push((name, Material::AnimatedTexture(frames, matflags)));
-			} else {
-				// overlay animation
-				let frames = parse_overlay_animation(&mut entry_reader, width, height, num_frames);
-				materials.push((name, Material::AnimatedTexture(frames, matflags)));
-			}
+			materials.push((name, result));
 		}
 
 		reader.set_position(reader.len() - 12);
@@ -119,18 +110,9 @@ impl<'a> Mti<'a> {
 	}
 
 	pub fn save(&self, output: &mut OutputWriter, palette: Option<&[u8]>) {
-		// todo more granular palette
-		use std::fmt::Write;
-		let mut pens_summary = String::from("name    \tvalue\n");
-		let mut flags_summary = String::from("name    \ta    \tb  \tflags\n");
-		let mut has_pens = false;
-		let mut has_flags = false;
 		for (name, material) in &self.materials {
 			match material {
-				Material::Pen(pen) => {
-					has_pens = true;
-					writeln!(pens_summary, "{name:8}\t{pen:?}").unwrap()
-				}
+				Material::Pen(_) => {}
 				Material::Texture(texture, _) => {
 					texture.save_as(name, output, palette);
 				}
@@ -138,8 +120,23 @@ impl<'a> Mti<'a> {
 					Texture::save_animated(frames, name, 12, output, palette);
 				}
 			}
+		}
+		self.save_report(output);
+	}
+
+	pub fn save_report(&self, output: &mut OutputWriter) {
+		use std::fmt::Write;
+		let mut pens_summary = String::from("name    \tvalue\n");
+		let mut flags_summary = String::from("name    \ta    \tb  \tflags\n");
+		let mut has_pens = false;
+		let mut has_flags = false;
+
+		for (name, material) in &self.materials {
 			match material {
-				Material::Pen(_) => {}
+				Material::Pen(pen) => {
+					has_pens = true;
+					writeln!(pens_summary, "{name:8}\t{pen:?}").unwrap()
+				}
 				Material::Texture(_, flags) | Material::AnimatedTexture(_, flags) => {
 					if flags.a != 0.0 || flags.b != 3.5 || flags.flags != 0 {
 						has_flags = true;
@@ -161,47 +158,4 @@ impl<'a> Mti<'a> {
 			output.write("texture_flags", "txt", &flags_summary);
 		}
 	}
-}
-
-fn parse_overlay_animation<'a>(
-	data: &mut Reader<'a>, width: u16, height: u16, num_frames: usize,
-) -> Vec<Texture<'a>> {
-	let base_pixels = data.slice(width as usize * height as usize);
-
-	let mut frames: Vec<Texture> = Vec::with_capacity(num_frames + 1);
-	frames.push(Texture::new(width, height, base_pixels));
-
-	let _runtime_anim_time = data.u32();
-
-	let mut data = data.rebased(); // offsets relative to here
-	let offsets = data.get_vec::<u32>(num_frames * 2); // run of meta offsets then run of pixels offsets
-	for (&metadata_offset, &pixel_offset) in
-		offsets[..num_frames].iter().zip(&offsets[num_frames..])
-	{
-		let mut meta = data.clone_at(metadata_offset as usize);
-		let mut src_pixels = data.clone_at(pixel_offset as usize);
-
-		let mut dest_pixels = frames.last().unwrap().pixels.clone().into_owned();
-
-		let mut dest_pixel_offset = meta.u16() as usize * 4;
-		let num_chunks = meta.u16();
-
-		for _ in 0..num_chunks {
-			let chunk_size = meta.u8() as usize * 4;
-			let output_offset = meta.u8() as usize * 4;
-			dest_pixels[dest_pixel_offset..dest_pixel_offset + chunk_size]
-				.clone_from_slice(src_pixels.slice(chunk_size));
-			dest_pixel_offset += chunk_size + output_offset;
-		}
-
-		frames.push(Texture::new(width, height, dest_pixels));
-	}
-
-	if frames.first() == frames.last() {
-		frames.pop();
-	} else {
-		eprintln!("texture doesn't loop properly!");
-	}
-
-	frames
 }

@@ -1,28 +1,27 @@
 use crate::{OutputWriter, Reader, Vec3, data_formats::Texture};
 
+/// DTI files contain a lot of level metadata
 pub struct Dti<'a> {
 	pub filename: &'a str,
 
 	pub player_start_arena_index: u32,
 	pub player_start_pos: Vec3,
 	pub player_start_angle: f32,
-	pub sky_info: SkyInfo,
+
+	pub ceiling_colour: i32,
+	pub floor_colour: i32,
+	pub reflected_ceiling_colour: i32,
+	pub reflected_floor_colour: i32,
+
 	pub skybox: Texture<'a>,
 	pub reflected_skybox: Option<Texture<'a>>,
+
 	pub translucent_colours: [[u8; 4]; 4],
 
 	pub arenas: Vec<DtiArena<'a>>,
 
 	pub num_pal_free_pixels: u32,
 	pub pal: &'a [u8],
-}
-
-#[derive(Default, Debug)]
-pub struct SkyInfo {
-	pub ceiling_colour: i32,
-	pub floor_colour: i32,
-	pub reflected_top_colour: i32,
-	pub reflected_bottom_colour: i32,
 }
 
 #[derive(Debug)]
@@ -33,6 +32,8 @@ pub struct DtiArena<'a> {
 	pub teleports: Vec<Teleport>, // todo check these
 }
 
+/// These are not actually real game entities, more like special map zones.
+/// Most actual gameplay entities come from CMI data.
 #[derive(Debug)]
 pub struct DtiEntity<'a> {
 	pub id: i32,
@@ -77,7 +78,10 @@ impl Dti<'_> {
 		let player_start_arena_index;
 		let player_start_pos;
 		let player_start_angle;
-		let sky_info: SkyInfo;
+		let ceiling_colour;
+		let floor_colour;
+		let reflected_ceiling_colour;
+		let reflected_floor_colour;
 		let translucent_colours;
 		let sky_width;
 		let sky_height;
@@ -89,23 +93,17 @@ impl Dti<'_> {
 			player_start_pos = data.vec3();
 			player_start_angle = data.f32();
 
-			let ceiling_colour = data.i32();
-			let floor_colour = data.i32();
+			ceiling_colour = data.i32();
+			floor_colour = data.i32();
 			sky_y = data.i32();
 			sky_x = data.i32();
 			sky_width = data.u32();
 			sky_height = data.u32();
-			let reflected_top_colour = data.i32();
-			let reflected_bottom_colour = data.i32();
+			reflected_ceiling_colour = data.i32();
+			reflected_floor_colour = data.i32();
 
-			sky_info = SkyInfo {
-				ceiling_colour,
-				floor_colour,
-				reflected_top_colour,
-				reflected_bottom_colour,
-			};
-
-			let colours = data.get::<[[i32; 4]; 4]>();
+			// 4 sets of rgba colours, each component stored in 4 bytes
+			let colours = data.get::<[[u32; 4]; 4]>();
 			translucent_colours = colours.map(|c| c.map(|n| n as u8));
 
 			assert_eq!(data.position(), teleports_offset);
@@ -236,7 +234,7 @@ impl Dti<'_> {
 			let mut skybox = Texture::new(sky_width as u16, src_height as u16, pixels);
 			skybox.position = (sky_x as i16, sky_y as i16);
 
-			let reflected_skybox = if sky_info.reflected_top_colour >= 0 {
+			let reflected_skybox = if reflected_ceiling_colour >= 0 {
 				let sky_pixels = data.slice(src_width * src_height);
 
 				// trim extra 4 pixels
@@ -264,7 +262,10 @@ impl Dti<'_> {
 			player_start_arena_index,
 			player_start_pos,
 			player_start_angle,
-			sky_info,
+			ceiling_colour,
+			floor_colour,
+			reflected_ceiling_colour,
+			reflected_floor_colour,
 			skybox,
 			reflected_skybox,
 			translucent_colours,
@@ -283,17 +284,36 @@ impl Dti<'_> {
 	pub fn save_info_as(&self, info_filename: &str, output: &mut OutputWriter) {
 		use std::fmt::Write;
 		let mut info = format!(
-			"name: {}\n\nplayer start arena: {}, pos: {}, angle: {}\ntranslucent colours: {:?}\npalette free rows: {}\n\n{:#?}\n\narenas ({}):\n",
+			"name: {}\n\nplayer start arena: {}, pos: {}, angle: {}\npalette free rows: {}\ntranslucent colours: ",
 			self.filename,
 			self.player_start_arena_index,
 			self.player_start_pos,
 			self.player_start_angle,
-			self.translucent_colours,
 			self.num_pal_free_pixels / 16,
-			self.sky_info,
-			self.arenas.len()
 		);
 
+		for c in self.translucent_colours {
+			let value = u32::from_be_bytes(c);
+			write!(&mut info, " #{value:08X}").unwrap();
+		}
+		info.push('\n');
+
+		let mut print_colour = |label, colour_index| {
+			if !(0..=255).contains(&colour_index) {
+				writeln!(&mut info, "{label}: ({colour_index})").unwrap();
+				return;
+			}
+			let offset = colour_index as usize * 3;
+			let rgb = &self.pal[offset..offset + 3];
+			let value = u32::from_be_bytes([0, rgb[0], rgb[1], rgb[2]]);
+			writeln!(&mut info, "{label}: #{value:06X}").unwrap();
+		};
+		print_colour("floor colour", self.floor_colour);
+		print_colour("ceiling colour", self.ceiling_colour);
+		print_colour("reflected floor colour", self.reflected_floor_colour);
+		print_colour("reflected ceiling colour", self.reflected_ceiling_colour);
+
+		writeln!(&mut info, "\narenas ({}):", self.arenas.len()).unwrap();
 		for (arena_index, arena) in self.arenas.iter().enumerate() {
 			writeln!(
 				info,

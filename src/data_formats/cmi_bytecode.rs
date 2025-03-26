@@ -1,3 +1,5 @@
+//! A mostly reverse-engineered parsing of the game's custom scripting bytecode
+
 use std::borrow::Cow;
 use std::fmt::Write;
 

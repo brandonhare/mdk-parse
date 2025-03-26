@@ -1,6 +1,7 @@
 use crate::{OutputWriter, Reader, Vec3};
 use std::fmt::Write;
 
+/// 3D Spline type used for CMI paths
 pub struct Spline {
 	pub points: Vec<SplinePoint>,
 }

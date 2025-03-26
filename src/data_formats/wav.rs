@@ -1,5 +1,6 @@
 use crate::{OutputWriter, Reader};
 
+/// Simple WAV file container.
 pub struct Wav<'a> {
 	pub file_data: &'a [u8],
 	pub flags: u32, // flags from SNI and MTO
@@ -17,6 +18,9 @@ impl<'a> Wav<'a> {
 		if reader.try_slice(4) != Some(b"RIFF") {
 			return None;
 		}
+
+		// todo no real reason to parse all this stuff, we just save the file data as-is
+
 		let file_length = reader.try_u32()? as usize;
 		if file_length > reader.remaining_len() {
 			return None;

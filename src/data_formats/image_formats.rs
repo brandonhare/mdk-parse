@@ -1,3 +1,6 @@
+//! Parsing functions for the various image formats the game uses.
+//! Names are either arbitrary or have some vague references in the game code.
+
 use crate::Reader;
 use crate::data_formats::Texture;
 
@@ -87,6 +90,13 @@ pub fn try_parse_basic_image<'a>(reader: &mut Reader<'a>) -> Option<Texture<'a>>
 	}
 	let pixels = reader.slice(num_pixels);
 	Some(Texture::new(width, height, pixels))
+}
+pub fn parse_basic_image<'a>(reader: &mut Reader<'a>) -> Texture<'a> {
+	let width = reader.u16();
+	let height = reader.u16();
+	let num_pixels = width as usize * height as usize;
+	let pixels = reader.slice(num_pixels);
+	Texture::new(width, height, pixels)
 }
 
 pub fn try_parse_palette_image<'a>(reader: &mut Reader<'a>) -> Option<(&'a [u8], Texture<'a>)> {
@@ -214,7 +224,8 @@ pub fn try_parse_crossfade_image<'a>(
 	Some(([lut1, lut2], Texture::new(width, height, pixels)))
 }
 
-pub fn parse_overlay_animation<'a>(reader: &mut Reader<'a>, num_frames: usize) -> Vec<Texture<'a>> {
+pub fn parse_overlay_animation<'a>(reader: &mut Reader<'a>) -> Vec<Texture<'a>> {
+	let num_frames = reader.u32() as usize;
 	let width = reader.u16();
 	let height = reader.u16();
 	let base_pixels = reader.slice(width as usize * height as usize);
@@ -222,7 +233,8 @@ pub fn parse_overlay_animation<'a>(reader: &mut Reader<'a>, num_frames: usize) -
 	let mut frames: Vec<Texture> = Vec::with_capacity(num_frames + 1);
 	frames.push(Texture::new(width, height, base_pixels));
 
-	let _runtime_anim_time = reader.u32();
+	let current_frame = reader.u32(); // modified at runtime
+	debug_assert_eq!(current_frame, 0);
 
 	let mut data = reader.rebased(); // offsets relative to here
 	let offsets = data.get_vec::<u32>(num_frames * 2); // run of meta offsets then run of pixels offsets
@@ -255,82 +267,4 @@ pub fn parse_overlay_animation<'a>(reader: &mut Reader<'a>, num_frames: usize) -
 	}
 
 	frames
-}
-
-#[derive(Debug, Eq, PartialEq, Clone, Copy)]
-pub enum Pen {
-	Texture(u8),     // index into mesh material array
-	Colour(u8),      // index into palette
-	Translucent(u8), // index into dti translucent_colours
-	Shiny(u8),       // todo
-	Unknown(i32),    // todo
-}
-impl Pen {
-	pub fn new(index: i32) -> Pen {
-		match index {
-			0..=255 => Pen::Texture(index as u8),
-			-255..=-1 => Pen::Colour(-index as u8),
-			-1010..=-990 => Pen::Shiny((-990 - index) as u8),
-			-1027..=-1024 => Pen::Translucent((-1024 - index) as u8),
-			..=-1028 => Pen::Unknown(index), // todo
-			_ => Pen::Unknown(index),        // todo
-		}
-	}
-}
-
-#[derive(Default)]
-pub struct ColourMap([u64; 4]);
-impl ColourMap {
-	pub fn new() -> Self {
-		Default::default()
-	}
-	pub fn from_tex(tex: &Texture) -> Self {
-		Self::from_pixels(&tex.pixels)
-	}
-	pub fn from_frames(frames: &[Texture]) -> Self {
-		let mut result = Self::new();
-		for frame in frames {
-			result.extend(frame.pixels.iter());
-		}
-		result
-	}
-	pub fn from_pixels(pixels: &[u8]) -> Self {
-		let mut result = Self::new();
-		result.extend(pixels);
-		result
-	}
-	pub fn push(&mut self, index: u8) {
-		self.0[(index >> 6) as usize] |= 1 << (index & 63);
-	}
-
-	pub fn compare(&self, pal1: &[u8], pal2: &[u8]) -> bool {
-		debug_assert_eq!(pal1.len(), 256 * 3);
-		debug_assert_eq!(pal2.len(), 256 * 3);
-
-		for (&mask, (block1, block2)) in self
-			.0
-			.iter()
-			.zip(pal1.chunks_exact(64 * 3).zip(pal2.chunks_exact(64 * 3)))
-		{
-			for i in 0..64 {
-				if mask & (1 << i) != 0 && block1[i * 3..(i + 1) * 3] != block2[i * 3..(i + 1) * 3]
-				{
-					return false;
-				}
-			}
-		}
-		true
-	}
-}
-impl Extend<u8> for ColourMap {
-	fn extend<Iter: IntoIterator<Item = u8>>(&mut self, iter: Iter) {
-		for p in iter {
-			self.push(p);
-		}
-	}
-}
-impl<'a> Extend<&'a u8> for ColourMap {
-	fn extend<Iter: IntoIterator<Item = &'a u8>>(&mut self, iter: Iter) {
-		self.extend(iter.into_iter().copied());
-	}
 }

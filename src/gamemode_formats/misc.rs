@@ -1,6 +1,8 @@
+//! Exports MISC assets
 use std::path::Path;
 use std::process::Stdio;
 
+use crate::data_formats::mesh::ColourMap;
 use crate::data_formats::{TextureHolder, TextureResult};
 use crate::file_formats::mti::Material;
 use crate::file_formats::{Bni, Fti, Lbb, Mti, Sni};
@@ -28,7 +30,7 @@ pub fn parse_misc(save_videos: bool) {
 
 	export_stats(&output);
 
-	// export LBBs
+	// export LBBs (load images)
 	for i in 3..=8 {
 		let lbb = load_misc_file(&format!("LOAD_{i}.LBB"));
 		let lbb = Lbb::parse(Reader::new(&lbb));
@@ -87,9 +89,7 @@ fn export_stats(output: &OutputWriter) {
 		fn get_palette(&self) -> &[u8] {
 			self.palette
 		}
-		fn get_used_colours(
-			&self, _name: &str, _colours: &mut crate::data_formats::image_formats::ColourMap,
-		) {
+		fn get_used_colours(&self, _name: &str, _colours: &mut ColourMap) {
 			unimplemented!()
 		}
 		fn get_translucent_colours(&self) -> [[u8; 4]; 4] {
@@ -135,6 +135,7 @@ fn export_stats(output: &OutputWriter) {
 	stats_bni.save(&mut stats_output, false);
 }
 
+/// Converts videos by just pointing ffmpeg at them
 fn export_video(input_path: &Path, output: &mut OutputWriter) {
 	let Some(filename) = input_path.file_name().and_then(|s| s.to_str()) else {
 		return;

@@ -1,6 +1,12 @@
 use crate::data_formats::mesh::{Mesh, MeshGeo, MeshTri};
 use crate::{OutputWriter, Reader, Vec3};
 
+/// BSP data for level geometry.
+pub struct Bsp<'a> {
+	pub planes: Vec<BspPlane>,
+	pub mesh: Mesh<'a>,
+}
+
 pub struct BspPlane {
 	pub normal: Vec3,
 	pub dist: f32,
@@ -10,11 +16,6 @@ pub struct BspPlane {
 	pub tris_front_index: u16,
 	pub tris_back_count: u16,
 	pub tris_back_index: u16,
-}
-
-pub struct Bsp<'a> {
-	pub planes: Vec<BspPlane>,
-	pub mesh: Mesh<'a>,
 }
 
 impl<'a> Bsp<'a> {
@@ -42,8 +43,8 @@ impl<'a> Bsp<'a> {
 				tris_back_index: data.u16(),
 			};
 
-			let zeroes = data.get::<[u32; 4]>();
-			assert_eq!(zeroes, [0; 4]);
+			let zeroes = data.slice(16);
+			assert_eq!(zeroes, [0; 16]);
 
 			assert!((-1..num_planes as i16).contains(&result.plane_index_behind));
 			assert!((-1..num_planes as i16).contains(&result.plane_index_front));
@@ -52,6 +53,9 @@ impl<'a> Bsp<'a> {
 			planes.push(result);
 		}
 
+		// now ignore all the planes we just read and just load all the triangles
+		// and squish them all into the result mesh.
+
 		let num_tris = data.u32() as usize;
 		let tris = MeshTri::try_parse_slice(data, num_tris).unwrap();
 
@@ -59,12 +63,13 @@ impl<'a> Bsp<'a> {
 		assert!(num_verts < 10000);
 		let verts = Vec3::swizzle_vec(data.get_vec::<Vec3>(num_verts));
 
+		// modified at runtime
 		let num_things = data.u32();
 		assert!(num_things < 10000);
 		let things = data.slice(num_things as usize);
-		assert!(things.iter().all(|c| *c == 255)); // todo what are these?
+		assert!(things.iter().all(|c| *c == 255));
 
-		//assert_eq!(data.position(), data.len());
+		// todo: store the raw geo in the bsp struct and don't bake the mesh right away
 
 		let bbox = Vec3::calculate_bbox(&verts);
 

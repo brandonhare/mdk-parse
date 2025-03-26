@@ -1,6 +1,7 @@
 use crate::data_formats::{Animation, Mesh, Texture, Wav, image_formats};
 use crate::{OutputWriter, Reader};
 
+/// BNI files hold random global data.
 pub struct Bni<'a> {
 	pub sounds: Vec<(&'a str, Wav<'a>)>,
 	pub textures: Vec<(&'a str, Texture<'a>)>,
@@ -20,7 +21,7 @@ impl<'a> Bni<'a> {
 			filesize as usize,
 			"filesize does not match"
 		);
-		file_reader.rebase();
+		file_reader.rebase(); // set base offsets relative to this point in the file
 
 		let mut sounds = Vec::new();
 		let mut textures = Vec::new();
@@ -42,8 +43,11 @@ impl<'a> Bni<'a> {
 				file_reader.clone_at(file_reader.position() + 12).u32() as usize
 			};
 
+			// make a new reader that only points at the asset data
 			let reader = file_reader.resized(offset..next_offset);
-			// guess asset types
+
+			// there's no way to tell what type each asset is, but thankfully
+			// we can just guess a bunch of kinds and it all works out
 
 			// wav
 			if reader.clone().try_slice(4) == Some(b"RIFF") {

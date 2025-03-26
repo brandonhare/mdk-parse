@@ -3,13 +3,7 @@ use std::borrow::Cow;
 use crate::data_formats::{Texture, Wav, image_formats::parse_animation};
 use crate::{OutputWriter, Reader};
 
-pub struct FontLetter<Pixels: AsRef<[u8]>> {
-	pub code: u8,
-	pub width: u8,
-	pub height: u8,
-	pub pixels: Pixels,
-}
-
+/// FTI files mostly contain fonts and strings, but also have a few other things.
 pub struct Fti<'a> {
 	pub arrow: Texture<'a>,
 	pub palette: &'a [u8],
@@ -18,6 +12,13 @@ pub struct Fti<'a> {
 	pub font_sml: Vec<FontLetter<&'a [u8]>>,
 	pub font_8: Vec<FontLetter<Vec<u8>>>,
 	pub strings: Vec<(&'a str, Cow<'a, str>)>,
+}
+
+pub struct FontLetter<Pixels: AsRef<[u8]>> {
+	pub code: u8,
+	pub width: u8,
+	pub height: u8,
+	pub pixels: Pixels,
 }
 
 impl<'a> Fti<'a> {

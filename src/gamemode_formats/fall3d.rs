@@ -1,13 +1,13 @@
-/// Exports the assets from FALL3D, which is the skydiving section at the start of each level.
+//! Exports the assets from FALL3D (the skydiving section at the start of each level)
 use crate::Reader;
-use crate::data_formats::image_formats::ColourMap;
+use crate::data_formats::mesh::ColourMap;
 use crate::data_formats::{Texture, TextureHolder, TextureResult};
 use crate::file_formats::mti::Material;
 use crate::file_formats::{Bni, Mti, Sni};
 use crate::output_writer::OutputWriter;
 use std::fmt::Write;
 
-// combine flare and zoom images into an animation
+/// combines flare and zoom images into an animation
 fn combine_animation_frames(bni: &mut Bni) {
 	let mut flare = Vec::new();
 	let mut zoom = Vec::new();
@@ -233,7 +233,7 @@ pub fn parse_fall3d(save_sounds: bool, save_textures: bool, save_meshes: bool) {
 				match material {
 					Material::Pen(_pen) => (),
 					Material::Texture(tex, _flags) if name.starts_with(&temp_filename) => {
-						temp_anim.push(tex.clone_ref());
+						temp_anim.push(tex.clone());
 					}
 					Material::Texture(tex, _flags) => tex.save_as(name, &mut output, Some(palette)),
 					Material::AnimatedTexture(frames, _flags) => {

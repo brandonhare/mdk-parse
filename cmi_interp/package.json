@@ -1,7 +1,0 @@
-{
-  "name": "cmi_interp",
-  "private": true,
-  "devDependencies": {
-    "@types/node": "^20.10.3"
-  }
-}
